@@ -1,0 +1,51 @@
+clients:
+  Jobb-Mac:
+    include:
+      - Documents
+      - Downloads
+      - .ssh
+      - .config
+      - .zshrc
+      - .bashrc
+      - .bash_profile
+      - .gitconfig
+      - .env
+      - Music
+      - Pictures
+      - div
+      - enviro
+      - .token*
+      - vscode
+    exclude:
+      - Library
+      - .zsh_sessions
+      - Applications
+      - Desktop
+      - Public
+    incremental: true
+    special_cases:
+      JoplinBackup:
+        source: "~/JoplinBackup"
+        destination: "~/Documents/joplineksport"
+        only_latest: true
+
+  Privat-Mac:
+    include:
+      - Documents
+      - Downloads
+      - Pictures
+      - Music
+      - .ssh
+      - .config
+      - .zshrc
+      - .bashrc
+      - .bash_profile
+      - .gitconfig
+      - .env
+      - .aws
+    exclude:
+      - Library
+      - Applications
+      - Desktop
+    incremental: false
+    special_cases: {}

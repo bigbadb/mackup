@@ -1,0 +1,31 @@
+# default-config.yaml
+
+# Navn på klient/maskin (kan bli oppdatert dynamisk)
+client_name: Default-Client
+
+# Standardmapper som skal inkluderes i backup
+include:
+  - Documents
+  - Downloads
+  - Pictures
+  - Music
+  - Movies
+  - .ssh
+  - .config
+  - .zshrc
+  - .bashrc
+  - .bash_profile
+  - .gitconfig
+  - .env
+  - Library/Application Support/Code/User
+
+# Standardmapper som skal ekskluderes fra backup
+exclude:
+  - Library
+  - .zsh_sessions
+  - Applications
+  - Desktop
+  - Public
+
+# Standard inkrementell backup-innstilling
+incremental: false
