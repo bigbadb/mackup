@@ -1,5 +1,7 @@
 # default-config.yaml
-
+# Dette er liksom fallback-konfigurasjonen om du ikke har en config.yaml. 
+# Du kan selvsagt bare bruke denne, men altså da kan det være at du har lyst til å redigere litt på den.
+# Eller på config.yaml
 # Navn på klient/maskin (kan bli oppdatert dynamisk)
 client_name: Default-Client
 
