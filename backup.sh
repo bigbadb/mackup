@@ -106,17 +106,36 @@ load_yaml_config() {
     if ! command -v yq >/dev/null 2>&1; then
         error "yq er påkrevd for YAML-parsing. Installer med 'brew install yq'"
         return 1
-    fi
+    }
 
     if [[ -f "$YAML_FILE" ]]; then
         debug "Laster konfigurasjon for $HOSTNAME fra $YAML_FILE"
-        INCLUDE=($(yq e ".hosts.$HOSTNAME.include[]" "$YAML_FILE"))
-        EXCLUDES=($(yq e ".hosts.$HOSTNAME.exclude[]" "$YAML_FILE"))
-        INCREMENTAL=$(yq e ".hosts.$HOSTNAME.incremental" "$YAML_FILE")
+        
+        # Last backup-strategi
+        BACKUP_STRATEGY=$(yq e ".hosts.$HOSTNAME.backup_strategy // .backup_strategy // \"comprehensive\"" "$YAML_FILE")
+        debug "Bruker backup-strategi: $BACKUP_STRATEGY"
+        
+        if [[ "$BACKUP_STRATEGY" == "selective" ]]; then
+            # Last selective-spesifikk konfigurasjon
+            INCLUDE=($(yq e ".hosts.$HOSTNAME.include[]" "$YAML_FILE"))
+            EXCLUDES=($(yq e ".hosts.$HOSTNAME.exclude[]" "$YAML_FILE"))
+        else
+            # Last comprehensive-spesifikk konfigurasjon
+            EXCLUDES=($(yq e ".hosts.$HOSTNAME.comprehensive_exclude[] // .comprehensive_exclude[]" "$YAML_FILE"))
+        fi
+        
+        INCREMENTAL=$(yq e ".hosts.$HOSTNAME.incremental // .incremental // false" "$YAML_FILE")
     elif [[ -f "$DEFAULT_CONFIG" ]]; then
         debug "Laster standardkonfigurasjon fra $DEFAULT_CONFIG"
-        INCLUDE=($(yq e ".include[]" "$DEFAULT_CONFIG"))
-        EXCLUDES=($(yq e ".exclude[]" "$DEFAULT_CONFIG"))
+        BACKUP_STRATEGY=$(yq e ".backup_strategy // \"comprehensive\"" "$DEFAULT_CONFIG")
+        
+        if [[ "$BACKUP_STRATEGY" == "selective" ]]; then
+            INCLUDE=($(yq e ".include[]" "$DEFAULT_CONFIG"))
+            EXCLUDES=($(yq e ".exclude[]" "$DEFAULT_CONFIG"))
+        else
+            EXCLUDES=($(yq e ".comprehensive_exclude[]" "$DEFAULT_CONFIG"))
+        fi
+        
         INCREMENTAL=$(yq e ".incremental" "$DEFAULT_CONFIG")
     else
         warn "Ingen konfigurasjonsfil funnet. Starter interaktivt oppsett."
@@ -132,6 +151,7 @@ parse_arguments() {
     LIST_BACKUPS_FLAG=false
     RESTORE_FLAG=false
     VERIFY_FLAG=false
+    PREVIEW_FLAG=false  # Ny flagg for å forhåndsvise backup
 
     while [[ $# -gt 0 ]]; do
         case "$1" in
@@ -154,6 +174,17 @@ parse_arguments() {
                 ;;
             --debug)
                 DEBUG=true
+                ;;
+            --preview)  # Ny parameter
+                PREVIEW_FLAG=true
+                ;;
+            --strategy=*)  # Ny parameter for å overstyre strategi
+                BACKUP_STRATEGY="${1#*=}"
+                if [[ "$BACKUP_STRATEGY" != "comprehensive" && "$BACKUP_STRATEGY" != "selective" ]]; then
+                    error "Ugyldig backup-strategi: $BACKUP_STRATEGY"
+                    show_help
+                    exit 1
+                fi
                 ;;
             --exclude=*)
                 if [[ -n "${1#*=}" ]]; then
@@ -189,16 +220,23 @@ Bruk: $(basename "$0") [ALTERNATIVER]
 
 Alternativer:
   --help                 Vis denne hjelpeteksten og avslutt
-  --dry-run              Simuler backup uten å gjøre endringer
-  --debug                Aktiver debug-logging
-  --exclude=DIR          Ekskluder spesifikke mapper fra backup
-  --incremental          Utfør inkrementell backup
-  --verify               Verifiser siste backup
-  --list-backups         List alle tilgjengelige backups
-  --restore=NAVN         Gjenopprett en spesifikk backup
+  --dry-run             Simuler backup uten å gjøre endringer
+  --debug               Aktiver debug-logging
+  --exclude=DIR         Ekskluder spesifikke mapper fra backup
+  --incremental         Utfør inkrementell backup
+  --verify              Verifiser siste backup
+  --list-backups        List alle tilgjengelige backups
+  --restore=NAVN        Gjenopprett en spesifikk backup
+  --preview            Forhåndsvis hvilke filer som vil bli kopiert
+  --strategy=TYPE      Velg backup-strategi (comprehensive/selective)
+
+Backup-strategier:
+  comprehensive        Full backup av hjemmekatalog med excludes
+  selective           Backup av spesifikt valgte mapper
 
 Eksempel:
-  $(basename "$0") --incremental --exclude=Downloads
+  $(basename "$0") --strategy=comprehensive --incremental
+  $(basename "$0") --preview --strategy=selective
 EOF
     exit 0
 }
@@ -209,6 +247,12 @@ EOF
 backup() {
     local exit_status=0
     log "INFO" "Starter backupprosess..."
+
+    # Hvis preview er aktivert, kjør preview og avslutt
+    if [[ "$PREVIEW_FLAG" == true ]]; then
+        preview_backup
+        return 0
+    }
 
     # Sjekk diskplass
     if ! check_disk_space "$REQUIRED_SPACE"; then
