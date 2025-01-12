@@ -89,9 +89,46 @@ setup_modules() {
 setup_config() {
     log "INFO" "Setter opp konfigurasjon..."
     
-    if [[ ! -f "${SCRIPT_DIR}/config.yaml" ]] && [[ -f "${SCRIPT_DIR}/default-config.yaml" ]]; then
-        cp "${SCRIPT_DIR}/default-config.yaml" "${SCRIPT_DIR}/config.yaml"
-        log "INFO" "Opprettet config.yaml fra default-konfigurasjon"
+    if [[ ! -f "${SCRIPT_DIR}/config.yaml" ]]; then
+        if [[ -f "${SCRIPT_DIR}/default-config.yaml" ]]; then
+            # Spør om backup-strategi
+            local strategy
+            while true; do
+                read -rp "Velg backup-strategi (comprehensive/selective) [comprehensive]: " strategy
+                strategy=${strategy:-comprehensive}
+                if [[ "$strategy" == "comprehensive" || "$strategy" == "selective" ]]; then
+                    break
+                fi
+                echo "Ugyldig valg. Vennligst velg 'comprehensive' eller 'selective'."
+            done
+            
+            # Kopier default config
+            cp "${SCRIPT_DIR}/default-config.yaml" "${SCRIPT_DIR}/config.yaml"
+            
+            # Oppdater med valgt strategi og hostname
+            local hostname
+            hostname=$(scutil --get LocalHostName || hostname)
+            
+            # Opprett host-spesifikk konfigurasjon
+            yq e ".hosts.$hostname.backup_strategy = \"$strategy\"" -i "${SCRIPT_DIR}/config.yaml"
+            
+            if [[ "$strategy" == "selective" ]]; then
+                # Kopier standard include/exclude lister
+                yq e ".include[]" "${SCRIPT_DIR}/default-config.yaml" | \
+                    yq e ".hosts.$hostname.include += [.]" -i "${SCRIPT_DIR}/config.yaml"
+                yq e ".exclude[]" "${SCRIPT_DIR}/default-config.yaml" | \
+                    yq e ".hosts.$hostname.exclude += [.]" -i "${SCRIPT_DIR}/config.yaml"
+            else
+                # Kopier comprehensive excludes
+                yq e ".comprehensive_exclude[]" "${SCRIPT_DIR}/default-config.yaml" | \
+                    yq e ".hosts.$hostname.comprehensive_exclude += [.]" -i "${SCRIPT_DIR}/config.yaml"
+            fi
+            
+            log "INFO" "Opprettet config.yaml med $strategy backup-strategi"
+        else
+            error "default-config.yaml mangler"
+            return 1
+        fi
     fi
 
     # Sett riktige tilganger
