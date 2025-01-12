@@ -2,19 +2,22 @@ Fleskeponniens
 # mackup
 Backup av Macintosh EDB-maskinene
 
-# Modulært Backup-System for macOS
+ Modulært Backup-System for macOS
 
-Et robust og konfigurerbart backup-system for macOS med støtte for inkrementelle backups, backup-rotasjon og omfattende feilhåndtering.
+Et robust og konfigurerbart backup-system for macOS med støtte for både comprehensive og selective backup-strategier, inkrementelle backups, backup-rotasjon og omfattende feilhåndtering.
 
 ## Funksjoner
 
 ### Kjernefunksjonalitet
+- To backup-strategier:
+  - Comprehensive: Backup av hele hjemmekatalogen med definerte unntak
+  - Selective: Backup av spesifikt valgte mapper og filer
 - YAML-basert konfigurasjon per maskin
 - Inkrementelle backups
 - Automatisk backup-rotasjon og vedlikehold
 - Robust feilhåndtering med retry-logikk
 - Detaljert logging med ulike loggnivåer
-- Dry-run modus for testing
+- Dry-run og preview modus for testing
 
 ### Vedlikehold og Sikkerhet
 - Automatisk verifisering av backups
@@ -23,6 +26,7 @@ Et robust og konfigurerbart backup-system for macOS med støtte for inkrementell
 - Opprydding av feilede backups
 - Checksumverifisering
 - Robust feilhåndtering ved nettverksproblemer
+- Force-include for kritiske filer
 
 ## Installasjon
 
@@ -36,7 +40,8 @@ Installasjonsskriptet vil:
 - Sjekke og installere nødvendige avhengigheter
 - Sette opp katalogstrukturen
 - Installere moduler
-- Opprette standardkonfigurasjon hvis nødvendig
+- Guide deg gjennom valg av backup-strategi
+- Opprette tilpasset konfigurasjon
 
 ## Avhengigheter
 
@@ -55,13 +60,23 @@ Systemet bruker to konfigurasjonsfiler:
 ```yaml
 hosts:
   Min-Mac:
+    backup_strategy: "comprehensive"  # eller "selective"
+    # For comprehensive backup:
+    comprehensive_exclude:
+      - "Library/Caches"
+      - ".Trash"
+      - "node_modules"
+    force_include:  # Alltid inkludert uansett excludes
+      - ".ssh"
+      - ".gitconfig"
+    
+    # For selective backup:
     include:
       - Documents
       - Pictures
-      - .ssh
     exclude:
       - Library
-      - .Trash
+    
     incremental: true
 ```
 
@@ -69,9 +84,11 @@ hosts:
 
 ### Grunnleggende bruk:
 ```bash
-./backup.sh                    # Kjør backup med standardinnstillinger
-./backup.sh --dry-run         # Simuler backup uten å gjøre endringer
-./backup.sh --incremental     # Kjør inkrementell backup
+./backup.sh                           # Kjør backup med standardinnstillinger
+./backup.sh --strategy=comprehensive  # Bruk comprehensive backup
+./backup.sh --strategy=selective      # Bruk selective backup
+./backup.sh --preview                # Forhåndsvis hvilke filer som vil bli kopiert
+./backup.sh --dry-run                # Simuler backup uten å gjøre endringer
 ```
 
 ### Andre kommandoer:
@@ -84,11 +101,28 @@ hosts:
 ```
 
 ### Flagg:
+- `--strategy=TYPE`: Velg backup-strategi (comprehensive/selective)
+- `--preview`: Forhåndsvis backup uten å gjøre endringer
 - `--dry-run`: Simuler backup uten å gjøre endringer
 - `--debug`: Aktiver debug-logging
 - `--exclude=DIR`: Ekskluder spesifikke mapper
 - `--incremental`: Utfør inkrementell backup
 - `--verify`: Verifiser backup etter fullføring
+
+## Backup-strategier
+
+### Comprehensive Backup
+- Tar backup av hele hjemmekatalogen
+- Bruker en definert liste med excludes
+- Støtter force-include for kritiske filer
+- Mer robust mot glemte filer
+- Krever mer diskplass
+
+### Selective Backup
+- Tar kun backup av spesifiserte mapper
+- Mer kontroll over hva som inkluderes
+- Mindre diskplass
+- Krever nøyere konfigurasjon
 
 ## Automatisk Vedlikehold
 
