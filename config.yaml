@@ -1,0 +1,67 @@
+<<<<<<< HEAD
+=======
+# config.yaml
+###################################################################################################################
+# Planen var å immplementere støtte for flere Macintosh-EDBer, slik at jeg skal kunne gjenbruke hele driten,      #
+# inklusive config.yaml. Det er noe greier med yq e ".hosts.$HOSTNAME", etc.                                      #
+# Det får bli seinere                                                                                             #
+# Ja, det var sant. Den derre special_cases-greia. Den kopierer filene fra source til destination,                #
+# og så skal den etter planen da ikke ta backup av source.                                                        #
+# Greit?                                                                                                          #
+###################################################################################################################
+>>>>>>> origin/main
+clients:
+  Jobb-Mac:
+    include:
+      - Documents
+      - Downloads
+      - .ssh
+      - .config
+      - .zshrc
+      - .bashrc
+      - .bash_profile
+      - .gitconfig
+      - .env
+      - Music
+      - Pictures
+      - div
+      - enviro
+      - .token*
+      - vscode
+    exclude:
+      - Library
+      - .zsh_sessions
+      - Applications
+      - Desktop
+      - Public
+    incremental: true
+    special_cases:
+      JoplinBackup:
+        source: "~/JoplinBackup"
+        destination: "~/Documents/joplineksport"
+        only_latest: true
+
+  Privat-Mac:
+    include:
+      - Documents
+      - Downloads
+      - Pictures
+      - Music
+      - .ssh
+      - .config
+      - .zshrc
+      - .bashrc
+      - .bash_profile
+      - .gitconfig
+      - .env
+      - .aws
+    exclude:
+      - Library
+      - Applications
+      - Desktop
+    incremental: false
+<<<<<<< HEAD
+    special_cases: {}
+=======
+    special_cases: {}
+>>>>>>> origin/main

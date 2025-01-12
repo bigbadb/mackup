@@ -1,0 +1,91 @@
+<<<<<<< HEAD
+# Standard backup-konfigurasjon
+backup_strategy: "comprehensive"
+=======
+# default-config.yaml
+# Dette er liksom fallback-konfigurasjonen om du ikke har en config.yaml. 
+# Du kan selvsagt bare bruke denne, men altså da kan det være at du har lyst til å redigere litt på den.
+# Eller på config.yaml
+# Navn på klient/maskin (kan bli oppdatert dynamisk)
+client_name: Default-Client
+
+# Standard backup-konfigurasjon
+backup_strategy: "comprehensive"  # 'comprehensive' eller 'selective'
+>>>>>>> origin/main
+
+# Standardkonfigurasjon for comprehensive backup
+comprehensive_exclude:
+  # Systemmapper
+  - "Library/Caches"
+  - "Library/Logs"
+  - ".Trash"
+  - ".cache"
+  - ".local/share/Trash"
+  
+  # Utviklingsmiljø
+  - "node_modules"
+  - ".npm"
+  - ".maven"
+  - ".gradle"
+  - "**/venv"
+  - "**/env"
+  - "**/.venv"
+  - "**/build"
+  - "**/dist"
+  
+  # Temporære filer
+  - "**/*.tmp"
+  - "**/*.temp"
+  - "**/*.swp"
+  - "**/*~"
+  
+  # Store applikasjonsmapper
+  - "Library/Application Support/Steam"
+  - "Library/Developer/Xcode/iOS DeviceSupport"
+  - "Library/Developer/Xcode/DerivedData"
+
+<<<<<<< HEAD
+# Filer som alltid skal inkluderes
+=======
+# Filer som alltid skal inkluderes, uavhengig av excludes
+>>>>>>> origin/main
+force_include:
+  - ".ssh/**"
+  - ".gitconfig"
+  - ".zshrc"
+  - ".bashrc"
+  - ".bash_profile"
+  - "Documents/viktige_dokumenter/**"
+
+<<<<<<< HEAD
+# Konfigurasjon for selective backup
+=======
+# Konfigurasjon for selective backup (brukes hvis backup_strategy er 'selective')
+>>>>>>> origin/main
+include:
+  - Documents
+  - Downloads
+  - Pictures
+  - Music
+  - .ssh
+  - .config
+  - .zshrc
+  - .bashrc
+  - .bash_profile
+  - .gitconfig
+  - .env
+  - Library/Application Support/Code/User
+
+exclude:
+  - Library
+  - .zsh_sessions
+  - Applications
+  - Desktop
+  - Public
+
+# Standard inkrementell backup-innstilling
+<<<<<<< HEAD
+incremental: false
+=======
+incremental: false
+>>>>>>> origin/main
