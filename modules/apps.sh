@@ -4,6 +4,8 @@
 # Modul for backup av applikasjoner
 # =============================================================================
 
+source "${MODULES_DIR}/config.sh"
+
 backup_apps() {
     local backup_dir="$1"
     log "INFO" "Starter backup av applikasjoner..."
@@ -24,7 +26,7 @@ restore_apps() {
     if [[ ! -f "$manifest_file" ]]; then
         error "Finner ikke applikasjonsmanifest: $manifest_file"
         return 1
-    }
+    fi
     
     log "INFO" "Starter gjenoppretting av applikasjoner..."
     

@@ -13,7 +13,7 @@ set -euo pipefail
 # ============================================================================
 # SCRIPT_DIR, LOG_FILE og andre variabler arves fra backup.sh
 TEMP_DIR="/tmp/app_scan_$$"
-
+source "${MODULES_DIR}/config.sh"
 # ============================================================================
 # Hjelpefunksjoner
 # ============================================================================

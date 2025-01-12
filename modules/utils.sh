@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-
+source "${MODULES_DIR}/config.sh"
 # =============================================================================
 # Modul for generelle hjelpefunksjoner
 # =============================================================================
@@ -51,12 +51,11 @@ collect_system_info() {
 
     # Hent konfigurerte info-typer
     local collect_info=true
-    local info_types=()
+    declare -a info_types=()
+    
     if [[ -f "$YAML_FILE" ]]; then
         collect_info=$(yq e ".system_info.collect // true" "$YAML_FILE")
-        while IFS= read -r type; do
-            [[ -n "$type" ]] && info_types+=("$type")
-        done < <(yq e ".system_info.include[]" "$YAML_FILE" 2>/dev/null)
+        mapfile -t info_types < <(yq e ".system_info.include[]" "$YAML_FILE" 2>/dev/null || echo "")
     fi
 
     if [[ "$collect_info" != "true" ]]; then
@@ -64,7 +63,7 @@ collect_system_info() {
         return 0
     fi
 
-    # Grunnleggende systeminfo
+    # Grunnleggende systeminfo (samles alltid)
     {
         echo "System Information"
         echo "================="
@@ -78,7 +77,7 @@ collect_system_info() {
     } > "${info_dir}/system_basic.txt"
 
     # Hardware info
-    if [[ " ${info_types[*]} " =~ " hardware_info " ]]; then
+    if [[ " ${info_types[@]:-} " =~ " hardware_info " ]]; then
         {
             echo "Hardware Information"
             echo "==================="
@@ -90,7 +89,7 @@ collect_system_info() {
     fi
 
     # Disk og lagringsinfo
-    if [[ " ${info_types[*]} " =~ " disk_usage " ]]; then
+    if [[ " ${info_types[@]:-} " =~ " disk_usage " ]]; then
         {
             echo "Disk Usage Information"
             echo "====================="
@@ -101,7 +100,7 @@ collect_system_info() {
     fi
 
     # Nettverksinfo
-    if [[ " ${info_types[*]} " =~ " network_config " ]]; then
+    if [[ " ${info_types[@]:-} " =~ " network_config " ]]; then
         {
             echo "Network Configuration"
             echo "====================="
@@ -115,7 +114,7 @@ collect_system_info() {
     fi
 
     # Installerte applikasjoner
-    if [[ " ${info_types[*]} " =~ " installed_apps " ]]; then
+    if [[ " ${info_types[@]:-} " =~ " installed_apps " ]]; then
         {
             echo "Installed Applications"
             echo "====================="
@@ -140,7 +139,7 @@ collect_system_info() {
         pmset -g
     } > "${info_dir}/system_settings.txt"
 
-    # Lag en komplett systemrapport
+    # Lag en komplett systemrapport med begrenset detaljnivå
     system_profiler -detailLevel mini > "${info_dir}/full_system_report.txt"
 
     log "INFO" "Systeminfo samlet i ${info_dir}"

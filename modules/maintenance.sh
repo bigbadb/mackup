@@ -4,6 +4,8 @@
 # Vedlikeholdsmodul for backup
 # =============================================================================
 
+source "${MODULES_DIR}/config.sh"
+
 # Konstanter for vedlikehold
 readonly MAX_BACKUPS=10  # Maksimalt antall backups å beholde
 readonly COMPRESSION_AGE=7  # Antall dager før komprimering
