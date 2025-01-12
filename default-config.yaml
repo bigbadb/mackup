@@ -1,19 +1,20 @@
-<<<<<<< HEAD
 # Standard backup-konfigurasjon
-backup_strategy: "comprehensive"
-=======
-# default-config.yaml
-# Dette er liksom fallback-konfigurasjonen om du ikke har en config.yaml. 
-# Du kan selvsagt bare bruke denne, men altså da kan det være at du har lyst til å redigere litt på den.
-# Eller på config.yaml
-# Navn på klient/maskin (kan bli oppdatert dynamisk)
-client_name: Default-Client
 
-# Standard backup-konfigurasjon
+# Grunnleggende konfigurasjon
 backup_strategy: "comprehensive"  # 'comprehensive' eller 'selective'
->>>>>>> origin/main
 
-# Standardkonfigurasjon for comprehensive backup
+# System info som skal samles ved backup
+system_info:
+  collect: true
+  include:
+    - os_version
+    - hardware_info
+    - installed_apps
+    - network_config
+    - disk_usage
+    - mounted_volumes
+
+# Konfigurasjon for comprehensive backup
 comprehensive_exclude:
   # Systemmapper
   - "Library/Caches"
@@ -44,11 +45,7 @@ comprehensive_exclude:
   - "Library/Developer/Xcode/iOS DeviceSupport"
   - "Library/Developer/Xcode/DerivedData"
 
-<<<<<<< HEAD
 # Filer som alltid skal inkluderes
-=======
-# Filer som alltid skal inkluderes, uavhengig av excludes
->>>>>>> origin/main
 force_include:
   - ".ssh/**"
   - ".gitconfig"
@@ -57,11 +54,7 @@ force_include:
   - ".bash_profile"
   - "Documents/viktige_dokumenter/**"
 
-<<<<<<< HEAD
 # Konfigurasjon for selective backup
-=======
-# Konfigurasjon for selective backup (brukes hvis backup_strategy er 'selective')
->>>>>>> origin/main
 include:
   - Documents
   - Downloads
@@ -83,9 +76,8 @@ exclude:
   - Desktop
   - Public
 
-# Standard inkrementell backup-innstilling
-<<<<<<< HEAD
+# Backup-innstillinger
 incremental: false
-=======
-incremental: false
->>>>>>> origin/main
+verify_after_backup: true
+compress_after_days: 7
+max_backups: 10

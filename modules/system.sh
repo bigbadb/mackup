@@ -1,5 +1,9 @@
 #!/usr/bin/env bash
 
+# =============================================================================
+# Modul for backup av systemfiler
+# =============================================================================
+
 backup_system() {
     local backup_dir="$1"
     log "INFO" "Starter backup av systemfiler..."
@@ -40,8 +44,4 @@ backup_system() {
 
     log "INFO" "Backup av systemfiler fullført"
     return 0
-<<<<<<< HEAD
 }
-=======
-}
->>>>>>> origin/main

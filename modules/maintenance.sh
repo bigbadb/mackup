@@ -15,56 +15,56 @@ verify_backup() {
     local verified=true
     local checksum_file="${backup_dir}/checksums.md5"
     
-    log "Starter verifikasjon av backup i ${backup_dir}..."
+    log "INFO" "Starter verifikasjon av backup i ${backup_dir}..."
     
     # Sjekk at backup-katalogen eksisterer
     if [[ ! -d "$backup_dir" ]]; then
-        log "FEIL: Backup-katalogen eksisterer ikke: ${backup_dir}"
+        error "Backup-katalogen eksisterer ikke: ${backup_dir}"
         return 1
     fi
     
     # Generer checksums hvis de ikke finnes
     if [[ ! -f "$checksum_file" ]]; then
-        log "Genererer checksums for backup..."
+        log "INFO" "Genererer checksums for backup..."
         find "$backup_dir" -type f ! -name "checksums.md5" -exec md5sum {} \; > "$checksum_file"
     fi
     
     # Verifiser checksums
     if ! md5sum -c "$checksum_file" > "${backup_dir}/verify_result.log" 2>&1; then
         verified=false
-        log "ADVARSEL: Noen filer feilet checksumverifisering. Se ${backup_dir}/verify_result.log"
+        warn "Noen filer feilet checksumverifisering. Se ${backup_dir}/verify_result.log"
     fi
     
     # Sjekk kritiske filer/mapper
     local required_items=("system" "apps.json" "homebrew.txt")
     for item in "${required_items[@]}"; do
         if [[ ! -e "${backup_dir}/${item}" ]]; then
-            log "FEIL: Kritisk element mangler: ${item}"
+            error "Kritisk element mangler: ${item}"
             verified=false
         fi
     done
     
     if [[ "$verified" == true ]]; then
-        log "Backup verifisert OK: ${backup_dir}"
+        log "INFO" "Backup verifisert OK: ${backup_dir}"
         return 0
     else
-        log "FEIL: Backup verifikasjon feilet for ${backup_dir}"
+        error "Backup verifikasjon feilet for ${backup_dir}"
         return 1
     fi
 }
 
 # Komprimerer eldre backups for å spare diskplass
 compress_old_backups() {
-    log "Leter etter gamle backups å komprimere..."
+    log "INFO" "Leter etter gamle backups å komprimere..."
     
     find "${BACKUP_BASE_DIR}" -maxdepth 1 -type d -name "backup-*" -mtime +"${COMPRESSION_AGE}" | while read -r backup_dir; do
         if [[ ! -f "${backup_dir}.tar.gz" ]]; then
-            log "Komprimerer ${backup_dir}..."
+            log "INFO" "Komprimerer ${backup_dir}..."
             if tar -czf "${backup_dir}.tar.gz" -C "$(dirname "$backup_dir")" "$(basename "$backup_dir")"; then
-                log "Vellykket komprimering av ${backup_dir}"
+                log "INFO" "Vellykket komprimering av ${backup_dir}"
                 rm -rf "$backup_dir"
             else
-                log "FEIL: Komprimering feilet for ${backup_dir}"
+                error "Komprimering feilet for ${backup_dir}"
             fi
         fi
     done
@@ -72,7 +72,7 @@ compress_old_backups() {
 
 # Roterer gamle backups basert på alder og antall
 rotate_backups() {
-    log "Starter backup-rotasjon..."
+    log "INFO" "Starter backup-rotasjon..."
     
     # Slett gamle komprimerte backups først
     find "${BACKUP_BASE_DIR}" -maxdepth 1 -type f -name "backup-*.tar.gz" -mtime +"${BACKUP_RETENTION}" -delete
@@ -96,18 +96,18 @@ rotate_backups() {
     
     if (( backup_count > MAX_BACKUPS )); then
         local excess=$((backup_count - MAX_BACKUPS))
-        log "For mange backups (${backup_count}/${MAX_BACKUPS}), skal fjerne ${excess} backup(s)..."
+        log "INFO" "For mange backups (${backup_count}/${MAX_BACKUPS}), skal fjerne ${excess} backup(s)..."
         
         # Hent liste over de eldste backupene vi skal fjerne
         while IFS= read -r old_backup; do
             if [[ -d "$old_backup" ]]; then
-                log "Sletter gammel backup: ${old_backup}"
+                log "INFO" "Sletter gammel backup: ${old_backup}"
                 if rm -rf "$old_backup"; then
                     local new_count
                     new_count=$(count_active_backups)
-                    log "Antall gjenværende backups: ${new_count}"
+                    log "INFO" "Antall gjenværende backups: ${new_count}"
                 else
-                    log "FEIL: Kunne ikke slette backup: ${old_backup}"
+                    error "Kunne ikke slette backup: ${old_backup}"
                 fi
             fi
         done < <(get_oldest_backups "$excess")
@@ -116,18 +116,18 @@ rotate_backups() {
         local final_count
         final_count=$(count_active_backups)
         if (( final_count > MAX_BACKUPS )); then
-            log "ADVARSEL: Har fortsatt for mange backups (${final_count}/${MAX_BACKUPS})"
+            warn "Har fortsatt for mange backups (${final_count}/${MAX_BACKUPS})"
         else
-            log "Backup-antall er nå innenfor grensen (${final_count}/${MAX_BACKUPS})"
+            log "INFO" "Backup-antall er nå innenfor grensen (${final_count}/${MAX_BACKUPS})"
         fi
     else
-        log "Antall backups (${backup_count}) er innenfor grensen på ${MAX_BACKUPS}"
+        log "INFO" "Antall backups (${backup_count}) er innenfor grensen på ${MAX_BACKUPS}"
     fi
 }
 
 # Funksjon for å rydde opp i feilede eller ufullstendige backups
 cleanup_failed_backups() {
-    log "Leter etter problematiske backups..."
+    log "INFO" "Leter etter problematiske backups..."
     
     # Definer påkrevde filer og mapper
     local required_items=("system" "apps.json" "homebrew.txt")
@@ -197,7 +197,7 @@ cleanup_failed_backups() {
 
 # Hovedfunksjon for vedlikehold
 maintain_backups() {
-    log "Starter backup-vedlikehold..."
+    log "INFO" "Starter backup-vedlikehold..."
     
     # Verifiser siste backup hvis den finnes
     if [[ -L "$LAST_BACKUP_LINK" ]]; then
@@ -209,9 +209,5 @@ maintain_backups() {
     compress_old_backups
     rotate_backups
     
-    log "Backup-vedlikehold fullført"
-<<<<<<< HEAD
+    log "INFO" "Backup-vedlikehold fullført"
 }
-=======
-}
->>>>>>> origin/main

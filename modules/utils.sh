@@ -42,44 +42,109 @@ debug() {
 # Funksjoner for systemsjekk
 # -----------------------------------------------------------------------------
 
-# Funksjon for å samle systeminfo
 collect_system_info() {
-    local info_file="$1"
+    local backup_dir="$1"
+    local info_dir="${backup_dir}/system_info"
+    mkdir -p "$info_dir"
     
+    log "INFO" "Samler systeminformasjon..."
+
+    # Hent konfigurerte info-typer
+    local collect_info=true
+    local info_types=()
+    if [[ -f "$YAML_FILE" ]]; then
+        collect_info=$(yq e ".system_info.collect // true" "$YAML_FILE")
+        while IFS= read -r type; do
+            [[ -n "$type" ]] && info_types+=("$type")
+        done < <(yq e ".system_info.include[]" "$YAML_FILE" 2>/dev/null)
+    fi
+
+    if [[ "$collect_info" != "true" ]]; then
+        log "INFO" "Systeminfo-innsamling er deaktivert i konfigurasjon"
+        return 0
+    fi
+
+    # Grunnleggende systeminfo
     {
         echo "System Information"
         echo "================="
         echo "Timestamp: $(date '+%Y-%m-%d %H:%M:%S')"
         echo "Hostname: $(scutil --get LocalHostName 2>/dev/null || hostname)"
         echo "OS Version: $(sw_vers -productVersion)"
+        echo "Build Version: $(sw_vers -buildVersion)"
         echo "Architecture: $(uname -m)"
         echo "User: $USER"
         echo "Home Directory: $HOME"
-        echo "Available Space: $(df -h ~ | awk 'NR==2 {print $4}')"
-        echo "Total Space: $(df -h ~ | awk 'NR==2 {print $2}')"
-        echo "Memory: $(sysctl hw.memsize | awk '{print $2/1024/1024/1024 " GB"}')"
-        echo "CPU: $(sysctl -n machdep.cpu.brand_string)"
-    } > "$info_file"
-}
+    } > "${info_dir}/system_basic.txt"
 
-# Sjekk tilgjengelig diskplass
-check_disk_space() {
-    local required_space="$1"
-    local available_space
-    available_space=$(df -Pk "$BACKUP_BASE_DIR" | awk 'NR==2 {print $4}')
-    
-    if (( available_space < required_space )); then
-        error "Ikke nok diskplass. Påkrevd: $((required_space / 1024)) MB, Tilgjengelig: $((available_space / 1024)) MB"
-        return 1
+    # Hardware info
+    if [[ " ${info_types[*]} " =~ " hardware_info " ]]; then
+        {
+            echo "Hardware Information"
+            echo "==================="
+            echo "CPU: $(sysctl -n machdep.cpu.brand_string)"
+            echo "CPU Cores: $(sysctl -n hw.ncpu)"
+            echo "Memory: $(( $(sysctl -n hw.memsize) / 1024 / 1024 / 1024 )) GB"
+            system_profiler SPHardwareDataType
+        } > "${info_dir}/hardware_info.txt"
     fi
-    
-    debug "Tilstrekkelig diskplass tilgjengelig: $((available_space / 1024)) MB"
-    return 0
-}
 
-<<<<<<< HEAD
-        echo "CPU: $(sysctl -n machdep.cpu.brand_string)"
-    } > "$info_file"
+    # Disk og lagringsinfo
+    if [[ " ${info_types[*]} " =~ " disk_usage " ]]; then
+        {
+            echo "Disk Usage Information"
+            echo "====================="
+            df -h
+            echo -e "\nMounted Volumes:"
+            mount
+        } > "${info_dir}/disk_info.txt"
+    fi
+
+    # Nettverksinfo
+    if [[ " ${info_types[*]} " =~ " network_config " ]]; then
+        {
+            echo "Network Configuration"
+            echo "====================="
+            echo "Network Interfaces:"
+            ifconfig
+            echo -e "\nRouting Table:"
+            netstat -rn
+            echo -e "\nDNS Configuration:"
+            scutil --dns
+        } > "${info_dir}/network_info.txt"
+    fi
+
+    # Installerte applikasjoner
+    if [[ " ${info_types[*]} " =~ " installed_apps " ]]; then
+        {
+            echo "Installed Applications"
+            echo "====================="
+            echo "App Store Applications:"
+            mas list 2>/dev/null || echo "mas not installed"
+            echo -e "\nHomebrew Applications:"
+            brew list 2>/dev/null || echo "brew not installed"
+            echo -e "\nApplications Directory:"
+            ls -la "/Applications"
+        } > "${info_dir}/installed_apps.txt"
+    fi
+
+    # Systeminnstillinger og defaults
+    {
+        echo "System Settings and Defaults"
+        echo "==========================="
+        echo "Security Settings:"
+        system_profiler SPSecureElementDataType SPFirewallDataType
+        echo -e "\nTime Zone Settings:"
+        systemsetup -gettimezone
+        echo -e "\nPower Management Settings:"
+        pmset -g
+    } > "${info_dir}/system_settings.txt"
+
+    # Lag en komplett systemrapport
+    system_profiler -detailLevel mini > "${info_dir}/full_system_report.txt"
+
+    log "INFO" "Systeminfo samlet i ${info_dir}"
+    return 0
 }
 
 # Sjekk tilgjengelig diskplass
@@ -117,11 +182,8 @@ calculate_backup_size() {
     local total_size=0
     
     if [[ "$strategy" == "comprehensive" ]]; then
-        # Beregn størrelse for hele hjemmekatalogen minus excludes
-        # Dette er en forenklet versjon - kan forbedres med mer nøyaktig exclude-håndtering
         total_size=$(du -sk "${HOME}" 2>/dev/null | cut -f1)
     else
-        # Summer størrelsen av inkluderte mapper
         while IFS= read -r dir; do
             if [[ -n "$dir" && -e "${HOME}/${dir}" ]]; then
                 local dir_size
@@ -155,25 +217,7 @@ is_excluded() {
     
     return 1  # Path is not excluded
 }
-=======
->>>>>>> origin/main
-    
-    if [[ "$strategy" == "comprehensive" ]]; then
-        while IFS= read -r pattern; do
-            if [[ -n "$pattern" && "$path" == *"$pattern"* ]]; then
-                return 0  # Path matches exclude pattern
-            fi
-        done < <(yq e ".hosts.$HOSTNAME.comprehensive_exclude[]" "$YAML_FILE" 2>/dev/null)
-    else
-        while IFS= read -r pattern; do
-            if [[ -n "$pattern" && "$path" == *"$pattern"* ]]; then
-                return 0  # Path matches exclude pattern
-            fi
-        done < <(yq e ".hosts.$HOSTNAME.exclude[]" "$YAML_FILE" 2>/dev/null)
-    fi
-    
-    return 1  # Path is not excluded
-}
+
 # -----------------------------------------------------------------------------
 # Hjelpefunksjoner
 # -----------------------------------------------------------------------------
@@ -214,8 +258,4 @@ safe_delete() {
         debug "Ingenting å slette: $path"
         return 0
     fi
-<<<<<<< HEAD
 }
-=======
-}
->>>>>>> origin/main
