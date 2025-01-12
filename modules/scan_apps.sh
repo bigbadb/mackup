@@ -155,21 +155,25 @@ generate_apps_manifest() {
         echo "# ============================================================================"
         echo
         
+        # Legger til innholdet av homebrew.txt hvis filen eksisterer og ikke er tom
         if [ -s "$TEMP_DIR/homebrew.txt" ]; then
             cat "$TEMP_DIR/homebrew.txt"
         fi
         echo
 
+        # Legger til innholdet av alternatives.txt hvis filen eksisterer
         if [ -f "$TEMP_DIR/alternatives.txt" ]; then
             cat "$TEMP_DIR/alternatives.txt"
         fi
         echo
 
+        # Legger til innholdet av mas.txt hvis filen eksisterer og ikke er tom
         if [ -s "$TEMP_DIR/mas.txt" ]; then
             cat "$TEMP_DIR/mas.txt"
         fi
         echo
 
+        # Legger til innholdet av test_no_alternatives.txt hvis filen eksisterer og ikke er tom
         if [ -s "$TEMP_DIR/test_no_alternatives.txt" ]; then
             cat "$TEMP_DIR/test_no_alternatives.txt"
         fi

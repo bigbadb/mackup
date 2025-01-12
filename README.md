@@ -1,36 +1,19 @@
-<<<<<<< HEAD
 # Modulært Backup-System for macOS
 
-Et robust og konfigurerbart backup-system for macOS med støtte for inkrementelle backups, backup-rotasjon og omfattende feilhåndtering.
-=======
-Fleskeponniens 
-# mackup
-Backup av Macintosh EDB-maskinene
-
- Modulært Backup-System for macOS
-
 Et robust og konfigurerbart backup-system for macOS med støtte for både comprehensive og selective backup-strategier, inkrementelle backups, backup-rotasjon og omfattende feilhåndtering.
->>>>>>> origin/main
 
 ## Funksjoner
 
 ### Kjernefunksjonalitet
-<<<<<<< HEAD
-=======
 - To backup-strategier:
   - Comprehensive: Backup av hele hjemmekatalogen med definerte unntak
   - Selective: Backup av spesifikt valgte mapper og filer
->>>>>>> origin/main
 - YAML-basert konfigurasjon per maskin
 - Inkrementelle backups
 - Automatisk backup-rotasjon og vedlikehold
 - Robust feilhåndtering med retry-logikk
 - Detaljert logging med ulike loggnivåer
-<<<<<<< HEAD
-- Dry-run modus for testing
-=======
 - Dry-run og preview modus for testing
->>>>>>> origin/main
 
 ### Vedlikehold og Sikkerhet
 - Automatisk verifisering av backups
@@ -39,10 +22,7 @@ Et robust og konfigurerbart backup-system for macOS med støtte for både compre
 - Opprydding av feilede backups
 - Checksumverifisering
 - Robust feilhåndtering ved nettverksproblemer
-<<<<<<< HEAD
-=======
 - Force-include for kritiske filer
->>>>>>> origin/main
 
 ## Installasjon
 
@@ -56,12 +36,8 @@ Installasjonsskriptet vil:
 - Sjekke og installere nødvendige avhengigheter
 - Sette opp katalogstrukturen
 - Installere moduler
-<<<<<<< HEAD
-- Opprette standardkonfigurasjon hvis nødvendig
-=======
 - Guide deg gjennom valg av backup-strategi
 - Opprette tilpasset konfigurasjon
->>>>>>> origin/main
 
 ## Avhengigheter
 
@@ -80,15 +56,6 @@ Systemet bruker to konfigurasjonsfiler:
 ```yaml
 hosts:
   Min-Mac:
-<<<<<<< HEAD
-    include:
-      - Documents
-      - Pictures
-      - .ssh
-    exclude:
-      - Library
-      - .Trash
-=======
     backup_strategy: "comprehensive"  # eller "selective"
     # For comprehensive backup:
     comprehensive_exclude:
@@ -106,7 +73,6 @@ hosts:
     exclude:
       - Library
     
->>>>>>> origin/main
     incremental: true
 ```
 
@@ -114,17 +80,11 @@ hosts:
 
 ### Grunnleggende bruk:
 ```bash
-<<<<<<< HEAD
-./backup.sh                    # Kjør backup med standardinnstillinger
-./backup.sh --dry-run         # Simuler backup uten å gjøre endringer
-./backup.sh --incremental     # Kjør inkrementell backup
-=======
 ./backup.sh                           # Kjør backup med standardinnstillinger
 ./backup.sh --strategy=comprehensive  # Bruk comprehensive backup
 ./backup.sh --strategy=selective      # Bruk selective backup
 ./backup.sh --preview                # Forhåndsvis hvilke filer som vil bli kopiert
 ./backup.sh --dry-run                # Simuler backup uten å gjøre endringer
->>>>>>> origin/main
 ```
 
 ### Andre kommandoer:
@@ -137,19 +97,14 @@ hosts:
 ```
 
 ### Flagg:
-<<<<<<< HEAD
-=======
 - `--strategy=TYPE`: Velg backup-strategi (comprehensive/selective)
 - `--preview`: Forhåndsvis backup uten å gjøre endringer
->>>>>>> origin/main
 - `--dry-run`: Simuler backup uten å gjøre endringer
 - `--debug`: Aktiver debug-logging
 - `--exclude=DIR`: Ekskluder spesifikke mapper
 - `--incremental`: Utfør inkrementell backup
 - `--verify`: Verifiser backup etter fullføring
 
-<<<<<<< HEAD
-=======
 ## Backup-strategier
 
 ### Comprehensive Backup
@@ -165,7 +120,6 @@ hosts:
 - Mindre diskplass
 - Krever nøyere konfigurasjon
 
->>>>>>> origin/main
 ## Automatisk Vedlikehold
 
 Systemet utfører automatisk følgende vedlikeholdsoppgaver:
@@ -238,8 +192,4 @@ Testene verifiserer:
 
 ## Lisens
 
-<<<<<<< HEAD
 MIT License
-=======
-MIT License
->>>>>>> origin/main
