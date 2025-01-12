@@ -5,13 +5,55 @@
 # Navn på klient/maskin (kan bli oppdatert dynamisk)
 client_name: Default-Client
 
-# Standardmapper som skal inkluderes i backup
+# Standard backup-konfigurasjon
+backup_strategy: "comprehensive"  # 'comprehensive' eller 'selective'
+
+# Standardkonfigurasjon for comprehensive backup
+comprehensive_exclude:
+  # Systemmapper
+  - "Library/Caches"
+  - "Library/Logs"
+  - ".Trash"
+  - ".cache"
+  - ".local/share/Trash"
+  
+  # Utviklingsmiljø
+  - "node_modules"
+  - ".npm"
+  - ".maven"
+  - ".gradle"
+  - "**/venv"
+  - "**/env"
+  - "**/.venv"
+  - "**/build"
+  - "**/dist"
+  
+  # Temporære filer
+  - "**/*.tmp"
+  - "**/*.temp"
+  - "**/*.swp"
+  - "**/*~"
+  
+  # Store applikasjonsmapper
+  - "Library/Application Support/Steam"
+  - "Library/Developer/Xcode/iOS DeviceSupport"
+  - "Library/Developer/Xcode/DerivedData"
+
+# Filer som alltid skal inkluderes, uavhengig av excludes
+force_include:
+  - ".ssh/**"
+  - ".gitconfig"
+  - ".zshrc"
+  - ".bashrc"
+  - ".bash_profile"
+  - "Documents/viktige_dokumenter/**"
+
+# Konfigurasjon for selective backup (brukes hvis backup_strategy er 'selective')
 include:
   - Documents
   - Downloads
   - Pictures
   - Music
-  - Movies
   - .ssh
   - .config
   - .zshrc
@@ -21,7 +63,6 @@ include:
   - .env
   - Library/Application Support/Code/User
 
-# Standardmapper som skal ekskluderes fra backup
 exclude:
   - Library
   - .zsh_sessions
