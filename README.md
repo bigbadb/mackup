@@ -54,26 +54,90 @@ Systemet bruker to konfigurasjonsfiler:
 ### Eksempel på konfigurasjon:
 
 ```yaml
-hosts:
-  Min-Mac:
-    backup_strategy: "comprehensive"  # eller "selective"
-    # For comprehensive backup:
-    comprehensive_exclude:
-      - "Library/Caches"
-      - ".Trash"
-      - "node_modules"
-    force_include:  # Alltid inkludert uansett excludes
-      - ".ssh"
-      - ".gitconfig"
-    
-    # For selective backup:
-    include:
-      - Documents
-      - Pictures
-    exclude:
-      - Library
-    
-    incremental: true
+
+# Standard backup-konfigurasjon
+
+# Grunnleggende konfigurasjon
+backup_strategy: "comprehensive"  # 'comprehensive' eller 'selective'
+
+# System info som skal samles ved backup
+system_info:
+  collect: true
+  include:
+    - os_version
+    - hardware_info
+    - installed_apps
+    - network_config
+    - disk_usage
+    - mounted_volumes
+
+# Konfigurasjon for comprehensive backup
+comprehensive_exclude:
+  # Systemmapper
+  - "Library/Caches"
+  - "Library/Logs"
+  - ".Trash"
+  - ".cache"
+  - ".local/share/Trash"
+  
+  # Utviklingsmiljø
+  - "node_modules"
+  - ".npm"
+  - ".maven"
+  - ".gradle"
+  - "**/venv"
+  - "**/env"
+  - "**/.venv"
+  - "**/build"
+  - "**/dist"
+  
+  # Temporære filer
+  - "**/*.tmp"
+  - "**/*.temp"
+  - "**/*.swp"
+  - "**/*~"
+  
+  # Store applikasjonsmapper
+  - "Library/Application Support/Steam"
+  - "Library/Developer/Xcode/iOS DeviceSupport"
+  - "Library/Developer/Xcode/DerivedData"
+
+# Filer som alltid skal inkluderes
+force_include:
+  - ".ssh/**"
+  - ".gitconfig"
+  - ".zshrc"
+  - ".bashrc"
+  - ".bash_profile"
+  - "Documents/viktige_dokumenter/**"
+
+# Konfigurasjon for selective backup
+include:
+  - Documents
+  - Downloads
+  - Pictures
+  - Music
+  - .ssh
+  - .config
+  - .zshrc
+  - .bashrc
+  - .bash_profile
+  - .gitconfig
+  - .env
+  - Library/Application Support/Code/User
+
+exclude:
+  - Library
+  - .zsh_sessions
+  - Applications
+  - Desktop
+  - Public
+
+# Backup-innstillinger
+incremental: false
+verify_after_backup: true
+compress_after_days: 7
+max_backups: 10
 ```
 
 ## Bruk
