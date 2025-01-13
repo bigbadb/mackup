@@ -22,12 +22,7 @@ readonly DEFAULT_CONFIG="${SCRIPT_DIR}/default-config.yaml"
 readonly LAST_BACKUP_LINK="${BACKUP_BASE_DIR}/last_backup"
 readonly REQUIRED_SPACE=2000000  # 2GB i KB
 
-# Opprett loggkatalog
-mkdir -p "$LOG_DIR"
-readonly TEMP_LOG_FILE="${LOG_DIR}/current.log"
-LOG_FILE="$TEMP_LOG_FILE"  # Starter som TEMP_LOG_FILE
-
-# Standardverdier
+# Standardverdier - må settes FØR de brukes
 DRY_RUN=false
 HELP_FLAG=false
 INCREMENTAL=false
@@ -38,6 +33,11 @@ LIST_BACKUPS_FLAG=false
 VERIFY_FLAG=false
 PREVIEW_FLAG=false
 BACKUP_STRATEGY=""
+
+# Opprett loggkatalog
+mkdir -p "$LOG_DIR"
+readonly TEMP_LOG_FILE="${LOG_DIR}/current.log"
+LOG_FILE="$TEMP_LOG_FILE"
 
 # =============================================================================
 # Last nødvendige moduler
@@ -157,7 +157,10 @@ parse_arguments() {
         shift
     done
 
-    [[ "$HELP_FLAG" == true ]] && { show_help; exit 0; }
+    if [ "$HELP_FLAG" = true ]; then
+    show_help
+    exit 0
+fi
 }
 
 # =============================================================================
@@ -199,8 +202,37 @@ main() {
 # =============================================================================
 # Backupfunksjoner
 # =============================================================================
-
 create_backup() {
+    local backup_status=0
+
+    # Opprett backup-katalog
+    if [[ "$DRY_RUN" != true ]]; then
+        mkdir -p "$BACKUP_DIR" || {
+            error "Kunne ikke opprette backup-katalog: $BACKUP_DIR"
+            return 1
+        }
+    fi
+
+    # Utfør selve backup-operasjonen
+    if ! backup_user_data "$BACKUP_DIR" "$@"; then
+        backup_status=$((backup_status + 1))
+        error "Feil under backup av brukerdata"
+    fi
+
+    # Lagre systeminfo hvis konfigurert
+    if [[ "$CONFIG_COLLECT_SYSINFO" == "true" ]]; then
+        if ! collect_system_info "$BACKUP_DIR"; then
+            backup_status=$((backup_status + 1))
+            error "Feil under innsamling av systeminfo"
+        fi
+    fi
+
+    # Backup av applikasjoner
+    if ! backup_apps "$BACKUP_DIR"; then
+        backup_status=$((backup_status + 1))
+        error "Feil under backup av applikasjoner"
+    fi
+
     # Fullfør backup
     if [[ $backup_status -eq 0 ]]; then
         if [[ "$DRY_RUN" != true ]]; then
