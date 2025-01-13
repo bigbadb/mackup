@@ -78,6 +78,64 @@ list_user_directories() {
         }
     fi
 }
+# Håndterer spesialtilfeller definert i config.yaml
+handle_special_cases() {
+    local hostname="$1"
+    local backup_dir="$2"
+    
+    log "INFO" "Sjekker etter spesialtilfeller for $hostname..."
+    
+    # Les special_cases fra config
+    local cases
+    cases=$(yq e ".hosts.$hostname.special_cases" "$YAML_FILE" 2>/dev/null)
+    
+    if [[ "$cases" == "null" || -z "$cases" ]]; then
+        debug "Ingen spesialtilfeller funnet"
+        return 0
+    fi
+    
+    # Prosesser hvert spesialtilfelle
+    while IFS= read -r case_name; do
+        [[ -z "$case_name" ]] && continue
+        
+        local source
+        local destination
+        local only_latest
+        
+        source=$(yq e ".hosts.$hostname.special_cases.$case_name.source" "$YAML_FILE")
+        destination=$(yq e ".hosts.$hostname.special_cases.$case_name.destination" "$YAML_FILE")
+        only_latest=$(yq e ".hosts.$hostname.special_cases.$case_name.only_latest // false" "$YAML_FILE")
+        
+        # Ekspander ~/ til full path
+        source="${source/#\~/$HOME}"
+        destination="${destination/#\~/$HOME}"
+        
+        if [[ ! -d "$source" ]]; then
+            warn "Kildekatalog for $case_name eksisterer ikke: $source"
+            continue
+        fi
+        
+        log "INFO" "Håndterer spesialtilfelle: $case_name"
+        debug "Kilde: $source"
+        debug "Mål: $destination"
+        
+        if [[ "$only_latest" == "true" ]]; then
+            # Kopier kun siste backup hvis only_latest er satt
+            local latest
+            latest=$(find "$source" -type f -print0 | xargs -0 ls -t | head -n1)
+            if [[ -n "$latest" ]]; then
+                mkdir -p "$destination"
+                cp "$latest" "$destination/"
+                log "INFO" "Kopierte siste backup for $case_name"
+            fi
+        else
+            # Kopier hele katalogen
+            mkdir -p "$destination"
+            cp -R "$source/"* "$destination/"
+            log "INFO" "Kopierte alle filer for $case_name"
+        fi
+    done < <(yq e ".hosts.$hostname.special_cases | keys | .[]" "$YAML_FILE" 2>/dev/null)
+}
 
 # Funksjon for å gjenopprette brukerdata
 restore_user_data() {
@@ -173,6 +231,11 @@ backup_user_data() {
     shift
     local dry_run=false
     local incremental=false
+    local error_count=0
+    local files_processed=0
+    local bytes_copied=0
+    local start_time
+    start_time=$(date +%s)
     
     # Parse argumenter
     while [[ $# -gt 0 ]]; do
@@ -187,14 +250,33 @@ backup_user_data() {
         shift
     done
     
-    log "INFO" "Starter backup av brukerdata..."
+    # Sett opp feilhåndtering
+    cleanup_incomplete_backup() {
+        local incomplete_dir="$1"
+        log "WARN" "Starter opprydding av ufullstendig backup..."
+        if [[ -d "$incomplete_dir" ]]; then
+            mv "$incomplete_dir" "${incomplete_dir}_incomplete_$(date +%Y%m%d_%H%M%S)"
+            log "INFO" "Flyttet ufullstendig backup til ${incomplete_dir}_incomplete"
+        fi
+    }
+    
+    # Sett opp trap for å håndtere feil og avbrudd
+    trap 'error "Backup avbrutt - starter opprydding"; cleanup_incomplete_backup "$backup_dir"; exit 1' ERR INT TERM
+    
+    log "INFO" "Starter backup av brukerdata til $backup_dir"
     
     # Bestem backup-strategi
     local strategy
     strategy=$(get_backup_strategy)
     log "INFO" "Bruker backup-strategi: $strategy"
     
-    # Bygg rsync-parametre basert på strategi
+    # Opprett backup-katalog
+    mkdir -p "$backup_dir" || {
+        error "Kunne ikke opprette backup-katalog: $backup_dir"
+        return 1
+    }
+    
+    # Bygg rsync-parametre
     local rsync_params
     rsync_params=($(build_rsync_params "$strategy"))
     
@@ -202,11 +284,12 @@ backup_user_data() {
     rsync_params+=(
         "-ah"              # Arkiv-modus og menneskelesbar output
         "--progress"       # Vis fremgang
+        "--stats"         # Samle statistikk
         "--delete"         # Slett filer som ikke finnes i kilde
         "--delete-excluded" # Slett ekskluderte filer fra backup
     )
     
-    # Legg til --dry-run hvis aktivert
+    # Håndter dry-run
     [[ "$dry_run" == true ]] && rsync_params+=("--dry-run")
     
     # Håndter inkrementell backup
@@ -215,17 +298,24 @@ backup_user_data() {
     fi
     
     # Utfør backup basert på strategi
+    local rsync_output
+    local rsync_status
+    
     if [[ "$strategy" == "comprehensive" ]]; then
         log "INFO" "Utfører comprehensive backup av hjemmekatalog"
-        if ! backup_with_retry "${HOME}" "${backup_dir}" "${rsync_params[@]}"; then
-            error "Comprehensive backup feilet"
-            return 1
-        fi
+        rsync_output=$(backup_with_retry "${HOME}" "${backup_dir}" "${rsync_params[@]}" 2>&1) || {
+            rsync_status=$?
+            error "Comprehensive backup feilet med status $rsync_status"
+            echo "$rsync_output" | log "ERROR"
+            error_count=$((error_count + 1))
+        }
     else
         log "INFO" "Utfører selective backup basert på include/exclude-lister"
-        local success=true
         
-        # Hent inkluderte mapper fra config
+        # Håndter spesialtilfeller først
+        handle_special_cases "$(hostname)" "$backup_dir" || error_count=$((error_count + 1))
+        
+        # Backup av spesifiserte mapper
         while IFS= read -r dir; do
             if [[ -n "$dir" ]]; then
                 local source="${HOME}/${dir}"
@@ -233,21 +323,44 @@ backup_user_data() {
                 
                 if [[ -e "$source" ]]; then
                     mkdir -p "$(dirname "$target")"
-                    if ! backup_with_retry "$source" "$target" "${rsync_params[@]}"; then
-                        warn "Kunne ikke ta backup av $dir"
-                        success=false
-                    fi
+                    rsync_output=$(backup_with_retry "$source" "$target" "${rsync_params[@]}" 2>&1) || {
+                        rsync_status=$?
+                        warn "Kunne ikke ta backup av $dir (status: $rsync_status)"
+                        echo "$rsync_output" | log "WARN"
+                        error_count=$((error_count + 1))
+                    }
                 else
                     debug "Hopper over $dir: ikke funnet"
                 fi
             fi
-        done < <(yq e ".hosts.$HOSTNAME.include[]" "$YAML_FILE")
-        
-        [[ "$success" != true ]] && return 1
+        done < <(yq e ".include[]" "$YAML_FILE")
     fi
     
-    log "INFO" "Backup av brukerdata fullført"
-    return 0
+    # Samle statistikk
+    if [[ -n "$rsync_output" ]]; then
+        files_processed=$(echo "$rsync_output" | grep "Number of files transferred" | awk '{print $5}')
+        bytes_copied=$(echo "$rsync_output" | grep "Total transferred file size" | awk '{print $5}')
+    fi
+    
+    # Regn ut varighet
+    local end_time
+    end_time=$(date +%s)
+    local duration=$((end_time - start_time))
+    
+    # Generer rapport
+    {
+        log "INFO" "Backup fullført med følgende statistikk:"
+        log "INFO" "- Filer prosessert: ${files_processed:-0}"
+        log "INFO" "- Bytes kopiert: ${bytes_copied:-0}"
+        log "INFO" "- Feil oppstått: $error_count"
+        log "INFO" "- Varighet: $duration sekunder"
+    }
+    
+    # Fjern trap
+    trap - ERR INT TERM
+    
+    # Returner feilstatus
+    return $((error_count > 0))
 }
 
 # Funksjon for å liste hvilke filer som vil bli inkludert

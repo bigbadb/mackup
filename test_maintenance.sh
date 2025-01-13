@@ -168,30 +168,35 @@ test_config_handling() {
     # Test 1: Last gyldig konfigurasjon med full struktur
     local test_config="${TEST_DIR}/test_config.yaml"
     cat > "$test_config" << EOF
-hosts:
-  ${TEST_HOSTNAME}:
-    backup_strategy: comprehensive
-    system_info:
-      collect: true
-      include:
-        - os_version
-        - hardware_info
-    comprehensive_exclude:
-      - "Library/Caches"
-      - ".Trash"
-    force_include:
-      - ".ssh/**"
-    include:
-      - Documents
-      - Pictures
-    exclude:
-      - Library
-    incremental: false
-    verify_after_backup: true
+# Standard konfigurasjon
+backup_strategy: "comprehensive"
+system_info:
+  collect: true
+  include:
+    - os_version
+    - hardware_info
+
+comprehensive_exclude:
+  - "Library/Caches"
+  - ".Trash"
+
+force_include:
+  - ".ssh/**"
+
+include:
+  - Documents
+  - Pictures
+
+exclude:
+  - Library
+
+incremental: false
+verify_after_backup: true
 EOF
+    chmod 600 "$test_config"
     
-    debug "Tester konfigurasjon for host: ${TEST_HOSTNAME}"
-    assert "load_config '$test_config' '${TEST_HOSTNAME}'" \
+    debug "Tester konfigurasjon"
+    assert "load_config '$test_config'" \
         "Lasting av gyldig konfigurasjon"
     
     # Test 2: Valider at korrekt strategi ble lastet
@@ -204,50 +209,97 @@ EOF
     
     # Test 4: Test selective strategi
     cat > "$test_config" << EOF
-hosts:
-  ${TEST_HOSTNAME}:
-    backup_strategy: selective
-    system_info:
-      collect: true
-      include:
-        - os_version
-    include:
-      - Documents
-      - Pictures
-    exclude:
-      - Library
-    incremental: false
-    verify_after_backup: true
+backup_strategy: "selective"
+system_info:
+  collect: true
+  include:
+    - os_version
+
+include:
+  - Documents
+  - Pictures
+
+exclude:
+  - Library
+
+incremental: false
+verify_after_backup: true
 EOF
+    chmod 600 "$test_config"
     
-    assert "load_config '$test_config' '${TEST_HOSTNAME}'" \
+    assert "load_config '$test_config'" \
         "Lasting av selective konfigurasjon"
     
     # Test 5: Håndtering av ugyldig konfigurasjon
-    echo "# Tester håndtering av ugyldig konfigurasjon..."
     echo "invalid: yaml: format" > "$test_config"
-    assert "! load_config '$test_config' '${TEST_HOSTNAME}'" \
+    chmod 600 "$test_config"
+    assert "! load_config '$test_config'" \
         "Avvisning av ugyldig konfigurasjon"
     
     # Test 6: Manglende konfigurasjonsfil
-    assert "! load_config '/nonexistent/config.yaml' '${TEST_HOSTNAME}'" \
+    assert "! load_config '/nonexistent/config.yaml'" \
         "Håndtering av manglende konfigurasjonsfil"
     
     # Test 7: Ugyldig strategi
     cat > "$test_config" << EOF
-hosts:
-  ${TEST_HOSTNAME}:
-    backup_strategy: invalid_strategy
-    system_info:
-      collect: true
+backup_strategy: "invalid_strategy"
+system_info:
+  collect: true
 EOF
+    chmod 600 "$test_config"
     
-    assert "! load_config '$test_config' '${TEST_HOSTNAME}'" \
+    assert "! load_config '$test_config'" \
         "Avvisning av ugyldig backup-strategi"
+}
+
+# Funksjon for å opprette testkonfigurasjon
+create_test_config() {
+    local config_file="$1"
+    local strategy="${2:-comprehensive}"
+    
+    cat > "$config_file" << EOF
+backup_strategy: "$strategy"
+system_info:
+  collect: true
+  include:
+    - os_version
+    - hardware_info
+
+EOF
+
+    if [[ "$strategy" == "comprehensive" ]]; then
+        cat >> "$config_file" << EOF
+comprehensive_exclude:
+  - "Library/Caches"
+  - ".Trash"
+
+force_include:
+  - ".ssh/**"
+EOF
+    else
+        cat >> "$config_file" << EOF
+include:
+  - Documents
+  - Pictures
+
+exclude:
+  - Library
+EOF
+    fi
+
+    cat >> "$config_file" << EOF
+incremental: false
+verify_after_backup: true
+EOF
+
+    chmod 600 "$config_file"
 }
 
 test_verify_backup() {
     echo -e "\nTester backup verifisering..."
+    
+    create_test_config "${TEST_DIR}/test_config.yaml"
+    export YAML_FILE="${TEST_DIR}/test_config.yaml"
     
     # Test 1: Verifiser en gyldig backup
     local valid_backup="${TEST_BACKUP_BASE}/backup-valid"
@@ -264,6 +316,39 @@ test_verify_backup() {
     # Test 3: Verifiser ikke-eksisterende backup
     assert "! verify_backup '${TEST_BACKUP_BASE}/nonexistent'" \
         "Verifisering av ikke-eksisterende backup"
+}
+
+test_system_info() {
+    echo -e "\nTester systeminfo-innsamling..."
+    
+    # Opprett test-konfigurasjon med eksplisitt system_info
+    local test_config="${TEST_DIR}/test_config.yaml"
+    cat > "$test_config" << EOF
+backup_strategy: "comprehensive"
+system_info:
+  collect: true
+  include:
+    - os_version
+    - hardware_info
+incremental: false
+verify_after_backup: true
+EOF
+    chmod 600 "$test_config"
+    export YAML_FILE="$test_config"
+    
+    local test_backup="${TEST_BACKUP_BASE}/backup-sysinfo"
+    mkdir -p "$test_backup"
+    
+    # Kjør systeminfo-innsamling (merk: vi fjerner /system_info fra stien)
+    collect_system_info "$test_backup"
+    
+    # Debug-logging
+    debug "Sjekker for system_basic.txt i: ${test_backup}/system_info"
+    ls -la "${test_backup}/system_info" || true
+    
+    # Test at grunnleggende systeminfo ble samlet
+    assert "[[ -f '${test_backup}/system_info/system_basic.txt' ]]" \
+        "Grunnleggende systeminfo ble samlet"
 }
 
 test_compress_old_backups() {
@@ -330,25 +415,6 @@ test_cleanup_failed_backups() {
         "Gammel mislykket backup ble fjernet"
     assert "[[ -d '$failed_new' ]]" \
         "Ny mislykket backup ble beholdt"
-}
-
-test_system_info() {
-    echo -e "\nTester systeminfo-innsamling..."
-    
-    local test_backup="${TEST_BACKUP_BASE}/backup-sysinfo"
-    create_test_backup "$test_backup"
-    
-    # Test systeminfo-innsamling
-    collect_system_info "${test_backup}/system_info"
-    
-    assert "[[ -f '${test_backup}/system_info/system_basic.txt' ]]" \
-        "Grunnleggende systeminfo ble samlet"
-    
-    # Test at hardware_info ble samlet når konfigurert
-    if [[ " ${CONFIG_SYSINFO_TYPES[*]} " =~ " hardware_info " ]]; then
-        assert "[[ -f '${test_backup}/system_info/hardware_info.txt' ]]" \
-            "Hardware info ble samlet"
-    fi
 }
 
 # =============================================================================

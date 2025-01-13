@@ -27,14 +27,17 @@ mkdir -p "$LOG_DIR"
 readonly TEMP_LOG_FILE="${LOG_DIR}/current.log"
 LOG_FILE="$TEMP_LOG_FILE"  # Starter som TEMP_LOG_FILE
 
-# Standardverdier for kommandolinjeargumenter
+# Standardverdier
 DRY_RUN=false
 HELP_FLAG=false
 INCREMENTAL=false
+EXCLUDES=()
+INCLUDE=()
 DEBUG=false
 LIST_BACKUPS_FLAG=false
 VERIFY_FLAG=false
 PREVIEW_FLAG=false
+BACKUP_STRATEGY=""
 
 # =============================================================================
 # Last nødvendige moduler
@@ -110,23 +113,14 @@ Eksempel:
 EOF
 }
 
+# =============================================================================
+# Håndter input-parametere
+# =============================================================================
 parse_arguments() {
-    while [[ $# -gt 0 ]]; do
+    while (( "$#" )); do
         case "$1" in
             --help)
                 HELP_FLAG=true
-                ;;
-            --list-backups)
-                LIST_BACKUPS_FLAG=true
-                ;;
-            --restore=*)
-                local backup_name="${1#*=}"
-                if [[ -z "$backup_name" ]]; then
-                    error "Backup navn må spesifiseres med --restore"
-                    exit 1
-                fi
-                restore_backup "$backup_name"
-                exit $?
                 ;;
             --verify)
                 VERIFY_FLAG=true
@@ -141,15 +135,15 @@ parse_arguments() {
                 PREVIEW_FLAG=true
                 ;;
             --strategy=*)
-                CONFIG_STRATEGY="${1#*=}"
-                if [[ "$CONFIG_STRATEGY" != "comprehensive" && "$CONFIG_STRATEGY" != "selective" ]]; then
-                    error "Ugyldig backup-strategi: $CONFIG_STRATEGY"
+                BACKUP_STRATEGY="${1#*=}"
+                if [[ "$BACKUP_STRATEGY" != "comprehensive" && "$BACKUP_STRATEGY" != "selective" ]]; then
+                    error "Ugyldig backup-strategi: $BACKUP_STRATEGY"
                     show_help
                     exit 1
                 fi
                 ;;
             --exclude=*)
-                [[ -n "${1#*=}" ]] && CONFIG_EXCLUDES+=("${1#*=}")
+                [[ -n "${1#*=}" ]] && EXCLUDES+=("${1#*=}")
                 ;;
             --incremental)
                 INCREMENTAL=true
@@ -163,82 +157,7 @@ parse_arguments() {
         shift
     done
 
-    # Håndter hjelp-flagget først
-    if [[ "$HELP_FLAG" == true ]]; then
-        show_help
-        exit 0
-    fi
-
-    # Debug-logging må aktiveres tidlig
-    if [[ "$DEBUG" == true ]]; then
-        debug "Debug-modus aktivert"
-    fi
-}
-
-# =============================================================================
-# Backupfunksjoner
-# =============================================================================
-
-create_backup() {
-    log "INFO" "Starter backupprosess..."
-
-    if [[ "$PREVIEW_FLAG" == true ]]; then
-        preview_backup
-        return 0
-    fi
-
-    if ! check_disk_space "$REQUIRED_SPACE"; then
-        error "Ikke nok diskplass for backup"
-        return 1
-    fi
-
-    if [[ "$DRY_RUN" == true ]]; then
-        log "INFO" "Kjører i dry-run modus - ingen endringer vil bli gjort"
-    fi
-
-    mkdir -p "$BACKUP_DIR"
-    debug "Backup-katalog opprettet: $BACKUP_DIR"
-
-    # Samle systeminfo hvis konfigurert
-    if [[ "$CONFIG_COLLECT_SYSINFO" == "true" ]]; then
-        local info_dir="${BACKUP_DIR}/system_info"
-        mkdir -p "$info_dir"
-        collect_system_info "$info_dir"
-    fi
-
-    # Backup komponenter
-    local backup_status=0
-    backup_user_data "$BACKUP_DIR" || backup_status=$((backup_status + 1))
-    backup_apps "$BACKUP_DIR" || backup_status=$((backup_status + 1))
-    backup_system "$BACKUP_DIR" || backup_status=$((backup_status + 1))
-
-    # Fullfør backup
-    if [[ $backup_status -eq 0 ]]; then
-        if [[ "$DRY_RUN" != true ]]; then
-            ln -sfn "$BACKUP_DIR" "$LAST_BACKUP_LINK"
-            
-            if [[ "$CONFIG_VERIFY" == "true" || "$VERIFY_FLAG" == true ]]; then
-                verify_backup "$BACKUP_DIR" || backup_status=$((backup_status + 1))
-            fi
-            
-            maintain_backups
-        fi
-        
-        local backup_size
-        backup_size=$(du -sh "$BACKUP_DIR" 2>/dev/null | cut -f1)
-        log "INFO" "Backup fullført${DRY_RUN:+" (dry-run)"}. Størrelse: $backup_size"
-    else
-        log "WARN" "Backup fullført med $backup_status feil"
-    fi
-
-    # Flytt loggfil til endelig plassering
-    if [[ "$DRY_RUN" != true ]]; then
-        local final_log="${LOG_DIR}/backup-${TIMESTAMP}.log"
-        mv "$LOG_FILE" "$final_log"
-        LOG_FILE="$final_log"
-    fi
-
-    return $backup_status
+    [[ "$HELP_FLAG" == true ]] && { show_help; exit 0; }
 }
 
 # =============================================================================
@@ -275,6 +194,40 @@ main() {
     # Utfør backup
     create_backup
     exit $?
+}
+
+# =============================================================================
+# Backupfunksjoner
+# =============================================================================
+
+create_backup() {
+    # Fullfør backup
+    if [[ $backup_status -eq 0 ]]; then
+        if [[ "$DRY_RUN" != true ]]; then
+            ln -sfn "$BACKUP_DIR" "$LAST_BACKUP_LINK"
+            
+            if [[ "$CONFIG_VERIFY" == "true" || "$VERIFY_FLAG" == true ]]; then
+                verify_backup "$BACKUP_DIR" || backup_status=$((backup_status + 1))
+            fi
+            
+            maintain_backups
+        fi
+        
+        local backup_size
+        backup_size=$(du -sh "$BACKUP_DIR" 2>/dev/null | cut -f1)
+        log "INFO" "Backup fullført${DRY_RUN:+" (dry-run)"}. Størrelse: $backup_size"
+    else
+        log "WARN" "Backup fullført med $backup_status feil"
+    fi
+
+    # Flytt loggfil til endelig plassering
+    if [[ "$DRY_RUN" != true ]]; then
+        local final_log="${LOG_DIR}/backup-${TIMESTAMP}.log"
+        mv "$LOG_FILE" "$final_log"
+        LOG_FILE="$final_log"
+    fi
+
+    return $backup_status
 }
 
 # Start scriptet hvis det kjøres direkte

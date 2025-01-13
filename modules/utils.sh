@@ -55,7 +55,10 @@ collect_system_info() {
     
     if [[ -f "$YAML_FILE" ]]; then
         collect_info=$(yq e ".system_info.collect // true" "$YAML_FILE")
-        mapfile -t info_types < <(yq e ".system_info.include[]" "$YAML_FILE" 2>/dev/null || echo "")
+        # Erstatt mapfile med while-loop for bedre macOS-kompatibilitet
+        while IFS= read -r type; do
+            [[ -n "$type" ]] && info_types+=("$type")
+        done < <(yq e ".system_info.include[]" "$YAML_FILE" 2>/dev/null || echo "")
     fi
 
     if [[ "$collect_info" != "true" ]]; then
@@ -77,7 +80,7 @@ collect_system_info() {
     } > "${info_dir}/system_basic.txt"
 
     # Hardware info
-    if [[ " ${info_types[@]:-} " =~ " hardware_info " ]]; then
+    if [[ " ${info_types[*]:-} " =~ " hardware_info " ]]; then
         {
             echo "Hardware Information"
             echo "==================="
@@ -89,7 +92,7 @@ collect_system_info() {
     fi
 
     # Disk og lagringsinfo
-    if [[ " ${info_types[@]:-} " =~ " disk_usage " ]]; then
+    if [[ " ${info_types[*]:-} " =~ " disk_usage " ]]; then
         {
             echo "Disk Usage Information"
             echo "====================="
@@ -100,7 +103,7 @@ collect_system_info() {
     fi
 
     # Nettverksinfo
-    if [[ " ${info_types[@]:-} " =~ " network_config " ]]; then
+    if [[ " ${info_types[*]:-} " =~ " network_config " ]]; then
         {
             echo "Network Configuration"
             echo "====================="
@@ -114,7 +117,7 @@ collect_system_info() {
     fi
 
     # Installerte applikasjoner
-    if [[ " ${info_types[@]:-} " =~ " installed_apps " ]]; then
+    if [[ " ${info_types[*]:-} " =~ " installed_apps " ]]; then
         {
             echo "Installed Applications"
             echo "====================="
@@ -244,6 +247,53 @@ is_empty() {
 # Sjekk om en kommando eksisterer
 command_exists() {
     command -v "$1" >/dev/null 2>&1
+}
+
+# Hjelpefunksjoner for filverifisering
+verify_file_integrity() {
+    local file="$1"
+    local verify_type="${2:-basic}"  # 'basic' eller 'full'
+    local status=0
+
+    debug "Verifiserer filintegritet: $file (type: $verify_type)"
+
+    # Grunnleggende sjekker
+    if [[ ! -f "$file" ]]; then
+        error "Fil eksisterer ikke: $file"
+        return 1
+    fi
+
+    if [[ ! -r "$file" ]]; then
+        error "Kan ikke lese fil: $file"
+        return 1
+    fi
+
+    # Sjekk filstørrelse
+    local file_size
+    file_size=$(stat -f %z "$file")
+    if [[ $file_size -eq 0 ]]; then
+        warn "Fil er tom: $file"
+        status=1
+    fi
+
+    # Full verifisering inkluderer flere sjekker
+    if [[ "$verify_type" == "full" ]]; then
+        # Prøv å lese filen for å sjekke om den er korrupt
+        if ! dd if="$file" of=/dev/null bs=1M 2>/dev/null; then
+            error "Kunne ikke lese fil: $file"
+            status=1
+        fi
+
+        # Sjekk filtillatelser
+        local perms
+        perms=$(stat -f "%Lp" "$file")
+        if [[ "$perms" =~ [0-7][0-7][7][0-7] ]]; then
+            warn "Fil har uvanlige tillatelser: $file ($perms)"
+            status=1
+        fi
+    fi
+
+    return $status
 }
 
 # Sikker sletting av filer

@@ -25,6 +25,14 @@ verify_backup() {
         return 1
     fi
     
+    # Verifiser integritet av hver fil
+    while IFS= read -r file; do
+        if ! verify_file_integrity "$file" "full"; then
+            warn "Integritetssjekk feilet for: $file"
+            verified=false
+        fi
+    done < <(find "$backup_dir" -type f ! -name "checksums.md5")
+    
     # Generer checksums hvis de ikke finnes
     if [[ ! -f "$checksum_file" ]]; then
         log "INFO" "Genererer checksums for backup..."
