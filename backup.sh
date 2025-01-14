@@ -34,6 +34,8 @@ VERIFY_FLAG=false
 PREVIEW_FLAG=false
 BACKUP_STRATEGY=""
 RESTORE_NAME=""
+CONFIG_WIZARD=false
+FIRST_TIME_SETUP=false 
 
 # Opprett loggkatalog
 mkdir -p "$LOG_DIR"
@@ -94,6 +96,8 @@ Bruk: $(basename "$0") [ALTERNATIVER]
 
 Alternativer:
   -h, --help              Vis denne hjelpeteksten
+  -c, --config            Kjør konfigurasjonswizard
+  --first-time            Kjør førstegangsoppsett
   -s                      Velg backup-strategi interaktivt
   -sc                     Bruk comprehensive backup-strategi
   -ss                     Bruk selective backup-strategi
@@ -146,6 +150,11 @@ handle_strategy_change() {
     local current_strategy="$1"
     local last_backup="${LAST_BACKUP_LINK}"
     
+    # Sjekk om dette er en inkrementell backup
+    if [[ "${INCREMENTAL}" != "true" ]]; then
+        return 0
+    fi
+    
     if [[ ! -L "$last_backup" ]]; then
         return 0  # Ingen tidligere backup
     fi
@@ -197,7 +206,8 @@ parse_arguments() {
     while (( "$#" )); do
         case "$1" in
             -h|--help)
-                HELP_FLAG=true
+                show_help
+                exit 0
                 ;;
             -s)
                 BACKUP_STRATEGY=$(prompt_strategy)
@@ -259,6 +269,12 @@ parse_arguments() {
             --debug)
                 DEBUG=true
                 ;;
+            -c|--config)
+                CONFIG_WIZARD=true
+                ;;
+            --first-time)
+                FIRST_TIME_SETUP=true
+                ;;
             *)
                 error "Ukjent parameter: $1"
                 show_help
@@ -267,10 +283,19 @@ parse_arguments() {
         esac
         shift
     done
-
-    if [[ "$HELP_FLAG" == true ]]; then
+    
+   # Legg til validering for gjensidig utelukkende flagg
+    local exclusive_count=0
+    [[ "$CONFIG_WIZARD" == true ]] && ((exclusive_count++))
+    [[ "$FIRST_TIME_SETUP" == true ]] && ((exclusive_count++))
+    [[ "$LIST_BACKUPS_FLAG" == true ]] && ((exclusive_count++))
+    [[ "$VERIFY_FLAG" == true ]] && ((exclusive_count++))
+    [[ -n "$RESTORE_NAME" ]] && ((exclusive_count++))
+    
+    if ((exclusive_count > 1)); then
+        error "Kan ikke kombinere --config, --first-time, --list-backups, --verify og --restore"
         show_help
-        exit 0
+        exit 1
     fi
 }
 
@@ -279,6 +304,7 @@ parse_arguments() {
 # =============================================================================
 
 main() {
+    local config_file="$HOME/.config/backup/config.yaml"
     # Forbedret error handling
     trap 'error "Feil i linje $LINENO: $BASH_COMMAND"' ERR
     
@@ -292,9 +318,27 @@ main() {
     # Parse argumenter før konfigurasjon for å håndtere --debug og strategy
     parse_arguments "$@"
     
+    # Håndter konfigurasjonswizard før hovedoperasjoner
+    if [[ "${CONFIG_WIZARD:-false}" == true ]]; then
+        if [[ ! -f "$YAML_FILE" ]]; then
+            cp "$DEFAULT_CONFIG" "$YAML_FILE"
+        fi
+        run_config_wizard "$YAML_FILE"
+        exit 0
+    fi
+    
+    # Håndter førstegangsoppsett
+    if [[ "${FIRST_TIME_SETUP:-false}" == true ]]; then
+        if [[ ! -f "$YAML_FILE" ]]; then
+            cp "$DEFAULT_CONFIG" "$YAML_FILE"
+        fi
+        run_first_time_wizard "$YAML_FILE"
+        exit 0
+    fi
+    
     # Last konfigurasjon
     debug "Laster konfigurasjon..."
-    if ! load_config "$YAML_FILE" "$(hostname)"; then
+    if ! load_config "$YAML_FILE" "$(scutil --get LocalHostName)"; then
         error "Kunne ikke laste konfigurasjon"
         exit 1
     fi
@@ -302,6 +346,43 @@ main() {
     # Håndter spesielle operasjoner
     if [[ "$LIST_BACKUPS_FLAG" == true ]]; then
         list_backups
+        exit 0
+    fi
+    
+    if [[ "$VERIFY_FLAG" == true ]]; then
+        if [[ -L "$LAST_BACKUP_LINK" ]]; then
+            verify_backup "$(readlink -f "$LAST_BACKUP_LINK")"
+            exit $?
+        else
+            error "Ingen backup å verifisere"
+            exit 1
+        fi
+    fi
+    
+    if [[ -n "$RESTORE_NAME" ]]; then
+        restore_backup "$RESTORE_NAME"
+        exit $?
+    fi
+    
+# Sjekk backup-strategi
+if [[ -z "$BACKUP_STRATEGY" ]]; then
+    if [[ -f "$YAML_FILE" ]]; then
+        # Bruk strategi fra YAML hvis ikke spesifisert via argument
+        BACKUP_STRATEGY=$(yq e ".backup_strategy" "$YAML_FILE")
+    fi
+
+    if [[ -z "$BACKUP_STRATEGY" ]]; then
+        feil "Ingen backup-strategi spesifisert. Bruk -s, -sc eller -ss"
+        avslutt 1
+    fi
+fi
+    
+    # Håndter strategi-endringer
+    handle_strategy_change "$BACKUP_STRATEGY"
+    
+    # Vis preview hvis flagget er satt
+    if [[ "$PREVIEW_FLAG" == true ]]; then
+        preview_backup
         exit 0
     fi
     
@@ -331,15 +412,16 @@ create_backup() {
     fi
 
     # Sett opp argumenter for backup_user_data
-    local backup_args=()
+    declare -a backup_args
+    backup_args=()
     [[ "$DRY_RUN" == true ]] && backup_args+=("--dry-run")
     [[ "$INCREMENTAL" == true ]] && backup_args+=("--incremental")
 
     # Utfør selve backup-operasjonen
-    if ! backup_user_data "$BACKUP_DIR" "${backup_args[@]}"; then
-        backup_status=$((backup_status + 1))
-        error "Feil under backup av brukerdata"
-    fi
+    if ! backup_user_data "$BACKUP_DIR" $([ "$DRY_RUN" = true ] && echo "--dry-run") $([ "$INCREMENTAL" = true ] && echo "--incremental"); then
+    backup_status=$((backup_status + 1))
+    error "Feil under backup av brukerdata"
+fi
 
     # Lagre systeminfo hvis konfigurert
     if [[ "$CONFIG_COLLECT_SYSINFO" == true ]]; then

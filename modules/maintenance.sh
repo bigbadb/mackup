@@ -97,16 +97,11 @@ EOF
 read_backup_metadata() {
     local backup_dir="$1"
     local metadata_file="${backup_dir}/${METADATA_FILE}"
-    
-    if [[ ! -f "$metadata_file" ]]; then
-        error "Metadata-fil mangler: $metadata_file"
-        return 1
-    fi
-    
+
     if [[ ! -r "$metadata_file" ]]; then
         error "Kan ikke lese metadata-fil: $metadata_file"
         return 1
-    }
+    fi
     
     # Sjekk metadata-versjon
     local version
@@ -146,7 +141,7 @@ update_backup_metadata() {
     if [[ ! -f "$metadata_file" ]]; then
         error "Kan ikke oppdatere metadata: Fil mangler"
         return 1
-    }
+    fi
     
     # Sikkerhetskopi av original metadata
     cp "$metadata_file" "${metadata_file}.bak"
@@ -177,7 +172,7 @@ generate_metadata_report() {
     if ! read_backup_metadata "$backup_dir"; then
         error "Kunne ikke lese metadata for rapport"
         return 1
-    }
+    fi
     
     {
         echo "===== Backup Rapport ====="
@@ -249,7 +244,7 @@ verify_backup() {
             error "Kritisk element mangler: ${item}"
             verified=false
         fi
-    fi
+    done
     
     # Oppdater metadata med verifikasjonsresultat
     update_backup_metadata "$backup_dir" "last_verified" "$(date '+%Y-%m-%d %H:%M:%S')"

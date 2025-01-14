@@ -188,11 +188,16 @@ main() {
         log "ERROR" "Installasjon feilet - se feilmeldinger over"
         exit 1
     fi
+    # Kjør førstegangsoppsett hvis det er en ny installasjon
+    if [[ ! -f "$HOME/.config/backup/config.yaml" ]]; then
+        echo "Det ser ut som dette er første gang du kjører backup-systemet."
+        if prompt_yes_no "Ønsker du å kjøre førstegangsoppsett nå?"; then
+            ./backup.sh --first-time
+        else
+            echo "Du kan kjøre førstegangsoppsett senere med: backup.sh --first-time"
+        fi
+    fi
 }
 
 # Kjør hovedfunksjonen
-<<<<<<< HEAD
 main
-=======
-main
->>>>>>> origin/main
