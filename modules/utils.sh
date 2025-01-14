@@ -38,6 +38,169 @@ debug() {
     fi
 }
 
+# =============================================================================
+# Progress-indikatorer og statusvisning
+# =============================================================================
+
+# Konstanter for progress
+readonly PROGRESS_WIDTH=50  # Bredden på progress bar
+readonly SPINNER_CHARS='⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'
+
+# Status for progress
+declare -i CURRENT_PROGRESS=0
+declare -i TOTAL_FILES=0
+declare -i PROCESSED_FILES=0
+declare CURRENT_PHASE=""
+declare PROGRESS_START_TIME
+declare PROGRESS_ENABLED=true
+
+# Initialiserer progress tracking
+init_progress() {
+    local total="$1"
+    local phase="$2"
+    CURRENT_PROGRESS=0
+    TOTAL_FILES=$total
+    PROCESSED_FILES=0
+    CURRENT_PHASE="$phase"
+    PROGRESS_START_TIME=$(date +%s)
+    
+    # Vis initial progress bar
+    if [[ "$PROGRESS_ENABLED" == true ]]; then
+        echo -ne "\033[s"  # Lagre cursor posisjon
+        draw_progress_bar 0
+    fi
+}
+
+# Tegner en progress bar
+draw_progress_bar() {
+    local percent=$1
+    local width=$PROGRESS_WIDTH
+    local completed=$((width * percent / 100))
+    local remaining=$((width - completed))
+    
+    # Beregn estimert gjenværende tid
+    local elapsed=$(($(date +%s) - PROGRESS_START_TIME))
+    local eta="?"
+    if [[ $percent -gt 0 ]]; then
+        eta=$((elapsed * (100 - percent) / percent))
+        eta=$(format_time "$eta")
+    fi
+    
+    # Tegn progress bar med farger
+    echo -ne "\033[u\033[K"  # Gå tilbake til lagret posisjon og clear linje
+    echo -ne "\r["
+    echo -ne "\033[32m"  # Grønn farge for fullført
+    for ((i=0; i<completed; i++)); do echo -n "="; done
+    echo -ne "\033[33m"  # Gul farge for cursor
+    [[ $completed -lt $width ]] && echo -n ">"
+    echo -ne "\033[37m"  # Hvit farge for gjenværende
+    for ((i=completed+1; i<width; i++)); do echo -n " "; done
+    echo -ne "\033[0m"  # Reset farge
+    echo -n "] "
+    printf "%3d%% " "$percent"
+    echo -n "[$CURRENT_PHASE] "
+    echo -n "ETA: $eta"
+}
+
+# Oppdaterer progress
+update_progress() {
+    local increment="${1:-1}"
+    PROCESSED_FILES=$((PROCESSED_FILES + increment))
+    
+    if [[ $TOTAL_FILES -gt 0 ]]; then
+        local new_progress=$((PROCESSED_FILES * 100 / TOTAL_FILES))
+        if [[ $new_progress != "$CURRENT_PROGRESS" ]]; then
+            CURRENT_PROGRESS=$new_progress
+            [[ "$PROGRESS_ENABLED" == true ]] && draw_progress_bar "$CURRENT_PROGRESS"
+        fi
+    fi
+}
+
+# Formaterer tid i sekunder til lesbar format
+format_time() {
+    local seconds=$1
+    local hours=$((seconds / 3600))
+    local minutes=$(((seconds % 3600) / 60))
+    local secs=$((seconds % 60))
+    
+    if [[ $hours -gt 0 ]]; then
+        printf "%dh%dm%ds" "$hours" "$minutes" "$secs"
+    elif [[ $minutes -gt 0 ]]; then
+        printf "%dm%ds" "$minutes" "$secs"
+    else
+        printf "%ds" "$secs"
+    fi
+}
+
+# Viser spinner for prosesser uten kjent lengde
+show_spinner() {
+    local pid=$1
+    local message="${2:-Arbeider...}"
+    local i=0
+    local spin_len=${#SPINNER_CHARS}
+    
+    while kill -0 "$pid" 2>/dev/null; do
+        local char="${SPINNER_CHARS:i++%spin_len:1}"
+        echo -ne "\r$char $message"
+        sleep 0.1
+    done
+    echo -ne "\r\033[K"  # Clear linje
+}
+
+# Vis fase-overskrift
+show_phase() {
+    local phase="$1"
+    local description="$2"
+    
+    echo -e "\n\033[1;34m=== $phase ===\033[0m"
+    [[ -n "$description" ]] && echo "$description"
+    echo
+}
+
+# Vis suksess-melding
+show_success() {
+    local message="$1"
+    echo -e "\033[1;32m✓ $message\033[0m"
+}
+
+# Vis feil-melding
+show_error() {
+    local message="$1"
+    echo -e "\033[1;31m✗ $message\033[0m"
+}
+
+# Vis advarsel
+show_warning() {
+    local message="$1"
+    echo -e "\033[1;33m⚠ $message\033[0m"
+}
+
+# Vis oppsummering av operasjon
+show_summary() {
+    local title="$1"
+    shift
+    local details=("$@")
+    
+    echo -e "\n\033[1;36m=== $title ===\033[0m"
+    for detail in "${details[@]}"; do
+        echo "• $detail"
+    done
+    echo
+}
+
+# Toggle progress visning
+toggle_progress() {
+    PROGRESS_ENABLED="$1"
+}
+
+# Eksempel på bruk:
+# init_progress 100 "Kopierer filer"
+# for ((i=0; i<100; i++)); do
+#     update_progress
+#     sleep 0.1
+# done
+# echo  # Ny linje etter fullført progress
+
 # -----------------------------------------------------------------------------
 # Funksjoner for systemsjekk
 # -----------------------------------------------------------------------------

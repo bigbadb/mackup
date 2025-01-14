@@ -47,6 +47,7 @@ comprehensive_exclude:
   - "Library/Developer/Xcode/DerivedData"
   - "Library/CloudStorage"
 
+
 # Filer som alltid skal inkluderes
 force_include:
   - ".ssh/**"
