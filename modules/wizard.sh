@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/usr/bin/env zsh
 
 # =============================================================================
 # Wizard-modul for interaktiv konfigurasjon
@@ -124,8 +124,8 @@ configure_comprehensive_patterns() {
                 yq e ".comprehensive_exclude += [\"$pattern\"]" -i "$config_file"
                 ;;
             3)
-                local patterns
-                mapfile -t patterns < <(yq e ".comprehensive_exclude[]" "$config_file")
+                local -a patterns
+                patterns=("${(f)$(yq e '.comprehensive_exclude[]' "$config_file")}")
                 select_from_menu "Velg mønster å fjerne:" "${patterns[@]}"
                 local index=$?
                 yq e "del(.comprehensive_exclude[$index])" -i "$config_file"
@@ -137,7 +137,7 @@ configure_comprehensive_patterns() {
                 ;;
             6)
                 local patterns
-                mapfile -t patterns < <(yq e ".force_include[]" "$config_file")
+                patterns=("${(f)$(yq e '.force_include[]' "$config_file")}")
                 select_from_menu "Velg mønster å fjerne:" "${patterns[@]}"
                 local index=$?
                 yq e "del(.force_include[$index])" -i "$config_file"
@@ -174,7 +174,7 @@ configure_selective_patterns() {
                 ;;
             3)
                 local patterns
-                mapfile -t patterns < <(yq e ".include[]" "$config_file")
+                patterns=("${(f)$(yq e '.exclude[]' "$config_file")}")
                 select_from_menu "Velg mønster å fjerne:" "${patterns[@]}"
                 local index=$?
                 yq e "del(.include[$index])" -i "$config_file"
@@ -186,7 +186,7 @@ configure_selective_patterns() {
                 ;;
             6)
                 local patterns
-                mapfile -t patterns < <(yq e ".exclude[]" "$config_file")
+                patterns=("${(f)$(yq e '.exclude[]' "$config_file")}")
                 select_from_menu "Velg mønster å fjerne:" "${patterns[@]}"
                 local index=$?
                 yq e "del(.exclude[$index])" -i "$config_file"

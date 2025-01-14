@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/usr/bin/env zsh
 
 # =============================================================================
 # Modul for skanning av applikasjoner
@@ -17,7 +17,7 @@ source "${MODULES_DIR}/config.sh"
 # ============================================================================
 # Hjelpefunksjoner
 # ============================================================================
-no_alternatives=()
+typeset -a no_alternatives
 
 scan_homebrew() {
     debug "Skanner Homebrew-installasjoner..."
@@ -68,9 +68,9 @@ scan_manual_apps() {
             (.obtained_from == "identified_developer") and
             (.path | startswith("/Applications")) and
             ((.path | contains("/System/") | not) and
-             (.path | contains("/Library/") | not))
+            (.path | contains("/Library/") | not))
         ) | .path' | \
-        while IFS= read -r path; do
+        while IFS='' read -r path; do
             app_name=$(normalize_name "$(/usr/bin/basename "$path")")
             
             if echo "$brew_apps" | /usr/bin/grep -qw "$app_name" || echo "$mas_apps" | /usr/bin/grep -qw "$app_name"; then
@@ -92,7 +92,6 @@ check_homebrew_alternatives() {
     brew search --casks '' > "$all_casks"
     
     typeset -A found_alternatives
-    local no_alternatives=()
     local new_casks=()
     local total_checked=0
     local total_found=0
@@ -100,7 +99,7 @@ check_homebrew_alternatives() {
     
     local total_apps=$(grep -v '^#' "$TEMP_DIR/manual.txt" | wc -l | tr -d ' ')
     
-    while IFS= read -r line; do
+    while IFS='' read -r line; do
         [[ "$line" =~ ^#.*$ || -z "$line" ]] && continue
         
         total_checked=$((total_checked + 1))

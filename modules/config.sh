@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/usr/bin/env zsh
 
 # =============================================================================
 # Modul for konfigurasjonshåndtering
@@ -11,14 +11,14 @@ set -euo pipefail
 # -----------------------------------------------------------------------------
 
 # Grunnleggende konfigurasjonsvariabler
-: "${CONFIG_STRATEGY:=""}"
-: "${CONFIG_INCREMENTAL:="false"}"
-: "${CONFIG_VERIFY:="true"}"
-declare -a CONFIG_EXCLUDES=()
-declare -a CONFIG_FORCE_INCLUDE=()
-declare -a CONFIG_INCLUDES=()
-: "${CONFIG_COLLECT_SYSINFO:="true"}"
-declare -a CONFIG_SYSINFO_TYPES=()
+: ${CONFIG_STRATEGY:=""}
+: ${CONFIG_INCREMENTAL:="false"}
+: ${CONFIG_VERIFY:="true"}
+typeset -ga CONFIG_EXCLUDES
+typeset -ga CONFIG_FORCE_INCLUDE
+typeset -ga CONFIG_INCLUDES
+: ${CONFIG_COLLECT_SYSINFO:="true"}
+typeset -ga CONFIG_SYSINFO_TYPES
 
 # -----------------------------------------------------------------------------
 # Valideringsfunksjoner
@@ -119,8 +119,14 @@ load_config() {
         return 1
     fi
     
-    # Last hovedkonfigurasjon
-    CONFIG_STRATEGY=$(yq e ".backup_strategy" "$config_file")
+    # Last hovedkonfigurasjon - respekter kommandolinje-argumenter
+    if [[ -z "$CONFIG_STRATEGY" ]]; then
+        CONFIG_STRATEGY=$(yq e ".backup_strategy" "$config_file")
+        debug "Hentet strategi fra config: $CONFIG_STRATEGY"
+    else
+        debug "Bruker kommandolinje-strategi: $CONFIG_STRATEGY"
+    fi
+    
     CONFIG_INCREMENTAL=$(yq e ".incremental // false" "$config_file")
     CONFIG_VERIFY=$(yq e ".verify_after_backup // true" "$config_file")
     CONFIG_COLLECT_SYSINFO=$(yq e ".system_info.collect // true" "$config_file")
@@ -133,26 +139,26 @@ load_config() {
     
     # Last arrays basert på strategi
     if [[ "$CONFIG_STRATEGY" == "comprehensive" ]]; then
-        while IFS= read -r line; do
+        while IFS='' read -r line; do
             [[ -n "$line" ]] && CONFIG_EXCLUDES+=("$line")
         done < <(yq e ".comprehensive_exclude[]" "$config_file")
         
-        while IFS= read -r line; do
+        while IFS='' read -r line; do
             [[ -n "$line" ]] && CONFIG_FORCE_INCLUDE+=("$line")
         done < <(yq e ".force_include[]" "$config_file")
     else
-        while IFS= read -r line; do
+        while IFS='' read -r line; do
             [[ -n "$line" ]] && CONFIG_INCLUDES+=("$line")
         done < <(yq e ".include[]" "$config_file")
         
-        while IFS= read -r line; do
+        while IFS='' read -r line; do
             [[ -n "$line" ]] && CONFIG_EXCLUDES+=("$line")
         done < <(yq e ".exclude[]" "$config_file")
     fi
     
     # Last system_info konfigurasjon
     if [[ "$CONFIG_COLLECT_SYSINFO" == "true" ]]; then
-        while IFS= read -r line; do
+        while IFS='' read -r line; do
             [[ -n "$line" ]] && CONFIG_SYSINFO_TYPES+=("$line")
         done < <(yq e ".system_info.include[]" "$config_file")
     fi

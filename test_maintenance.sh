@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/usr/bin/env zsh
 
 # =============================================================================
 # Utvidet Test Suite for Backup System
@@ -7,7 +7,7 @@
 set -euo pipefail
 
 # Globale variabler for testing
-readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+readonly SCRIPT_DIR="${0:A:h}"
 readonly MODULES_DIR="${SCRIPT_DIR}/modules"
 readonly TEST_DIR="$(mktemp -d)"
 readonly TEST_BACKUP_BASE="${TEST_DIR}/backups"
@@ -15,9 +15,9 @@ readonly TEST_LOG_DIR="${TEST_BACKUP_BASE}/logs"
 readonly TEST_HOSTNAME="$(scutil --get LocalHostName 2>/dev/null || hostname)"
 
 # Test statistikk
-declare -i TESTS_RUN=0
-declare -i TESTS_FAILED=0
-declare -i TESTS_SKIPPED=0
+typeset -i TESTS_RUN=0
+typeset -i TESTS_FAILED=0
+typeset -i TESTS_SKIPPED=0
 
 # Farger for output
 readonly GREEN='\033[0;32m'
@@ -37,7 +37,8 @@ setup() {
     rm -f "${TEST_DIR}"/*.yaml
     
     # Verifiser at nødvendige filer eksisterer
-    local required_files=(
+    typeset -a required_files
+    required_files=(
         "${MODULES_DIR}/maintenance.sh"
         "${MODULES_DIR}/utils.sh"
         "${MODULES_DIR}/config.sh"
@@ -326,8 +327,8 @@ test_system_info() {
     cat > "$test_config" << EOF
 backup_strategy: "comprehensive"
 system_info:
-  collect: true
-  include:
+    collect: true
+    include:
     - os_version
     - hardware_info
 incremental: false

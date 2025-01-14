@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/usr/bin/env zsh
 
 # =============================================================================
 # Installasjonsskript for Fleskeponniens Backup-System
@@ -7,7 +7,7 @@
 set -euo pipefail
 
 # Konstanter
-readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+readonly SCRIPT_DIR="${0:A:h}"
 readonly REQUIRED_DIRS=("modules" "backups" "backups/logs")
 readonly REQUIRED_DEPS=("yq" "rsync" "mas")
 

@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/usr/bin/env zsh
 
 # =============================================================================
 # Vedlikeholdsmodul for backup-system
@@ -112,8 +112,8 @@ read_backup_metadata() {
     fi
     
     # Parse og returner metadata som et assosiativt array
-    declare -A metadata
-    while IFS='=' read -r key value; do
+    typeset -A metadata
+    while IFS='=' IFS='' read -r key value; do
         # Ignorer kommentarer og tomme linjer
         [[ "$key" =~ ^[[:space:]]*# ]] && continue
         [[ -z "$key" ]] && continue
@@ -218,12 +218,12 @@ verify_backup() {
     fi
     
     # Verifiser integritet av hver fil
-    while IFS= read -r file; do
-        if ! verify_file_integrity "$file" "full"; then
-            warn "Integritetssjekk feilet for: $file"
+    find "$backup_dir" -type f ! -name "$CHECKSUM_FILE" ! -name "$METADATA_FILE" | while IFS='' read -r filename; do
+        if ! verify_file_integrity "$filename" "full"; then
+            warn "Integritetssjekk feilet for: $filename"
             verified=false
         fi
-    done < <(find "$backup_dir" -type f ! -name "$CHECKSUM_FILE" ! -name "$METADATA_FILE")
+    done
     
     # Generer checksums hvis de ikke finnes
     if [[ ! -f "$checksum_file" ]]; then
@@ -232,13 +232,13 @@ verify_backup() {
     fi
     
     # Verifiser checksums
-    if ! md5sum -c "$checksum_file" > "${backup_dir}/verify_result.log" 2>&1; then
+    if ! (cd "$backup_dir" && md5sum -c "$checksum_file" > "${backup_dir}/verify_result.log" 2>&1); then
         verified=false
         warn "Noen filer feilet checksumverifisering. Se ${backup_dir}/verify_result.log"
     fi
     
     # Sjekk kritiske filer/mapper
-    local required_items=("system" "apps.json" "homebrew.txt")
+    local -a required_items=("system" "apps.json" "homebrew.txt")
     for item in "${required_items[@]}"; do
         if [[ ! -e "${backup_dir}/${item}" ]]; then
             error "Kritisk element mangler: ${item}"
@@ -247,8 +247,10 @@ verify_backup() {
     done
     
     # Oppdater metadata med verifikasjonsresultat
-    update_backup_metadata "$backup_dir" "last_verified" "$(date '+%Y-%m-%d %H:%M:%S')"
-    update_backup_metadata "$backup_dir" "verification_status" "$verified"
+    if [[ -f "${backup_dir}/${METADATA_FILE}" ]]; then
+        update_backup_metadata "$backup_dir" "last_verified" "$(date '+%Y-%m-%d %H:%M:%S')"
+        update_backup_metadata "$backup_dir" "verification_status" "$verified"
+    fi
     
     if [[ "$verified" == true ]]; then
         log "INFO" "Backup verifisert OK: ${backup_dir}"
@@ -323,7 +325,7 @@ rotate_backups() {
         log "INFO" "For mange backups (${backup_count}/${MAX_BACKUPS}), skal fjerne ${excess} backup(s)..."
         
         # Hent liste over de eldste backupene vi skal fjerne
-        while IFS= read -r old_backup; do
+        while IFS='' read -r backup; do
             if [[ -d "$old_backup" ]]; then
                 log "INFO" "Sletter gammel backup: ${old_backup}"
                 if rm -rf "$old_backup"; then
@@ -358,12 +360,12 @@ cleanup_failed_backups() {
     log "INFO" "Leter etter problematiske backups..."
     
     # Definer påkrevde filer og mapper
-    local required_items=("system" "apps.json" "homebrew.txt")
+   typeset -a required_items=("system" "apps.json" "homebrew.txt")
     local delete_count=0
     local problem_count=0
     local keep_count=0
     
-    while IFS= read -r backup_dir; do
+    while IFS='' read -r backup_dir; do
         local problems=()
         local is_empty=true
         local missing_files=()
@@ -466,7 +468,7 @@ validate_backup_integrity() {
         fi
         
         # Sjekk etter korrupte filer
-        while IFS= read -r file; do
+        while IFS='' read -r line; do
             if ! verify_file_integrity "$file" "full"; then
                 error "Filintegritetssjekk feilet for: $file"
                 status=1

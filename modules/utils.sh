@@ -1,5 +1,9 @@
-#!/usr/bin/env bash
-source "${MODULES_DIR}/config.sh"
+#!/usr/bin/env zsh
+setopt extendedglob
+setopt NO_nomatch
+setopt NULL_GLOB
+
+. "${MODULES_DIR}/config.sh"
 # =============================================================================
 # Modul for generelle hjelpefunksjoner
 # =============================================================================
@@ -44,15 +48,15 @@ debug() {
 
 # Konstanter for progress
 readonly PROGRESS_WIDTH=50  # Bredden på progress bar
-readonly SPINNER_CHARS='⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'
+typeset -r SPINNER_CHARS='⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'
 
 # Status for progress
-declare -i CURRENT_PROGRESS=0
-declare -i TOTAL_FILES=0
-declare -i PROCESSED_FILES=0
-declare CURRENT_PHASE=""
-declare PROGRESS_START_TIME
-declare PROGRESS_ENABLED=true
+typeset -i CURRENT_PROGRESS=0
+typeset -i TOTAL_FILES=0
+typeset -i PROCESSED_FILES=0
+typeset CURRENT_PHASE=""
+typeset PROGRESS_START_TIME
+typeset PROGRESS_ENABLED=true
 
 # Initialiserer progress tracking
 init_progress() {
@@ -214,12 +218,12 @@ collect_system_info() {
 
     # Hent konfigurerte info-typer
     local collect_info=true
-    declare -a info_types=()
+    typeset -a info_types
+    info_types=()
     
     if [[ -f "$YAML_FILE" ]]; then
         collect_info=$(yq e ".system_info.collect // true" "$YAML_FILE")
-        # Erstatt mapfile med while-loop for bedre macOS-kompatibilitet
-        while IFS= read -r type; do
+        while IFS='' read -r type; do
             [[ -n "$type" ]] && info_types+=("$type")
         done < <(yq e ".system_info.include[]" "$YAML_FILE" 2>/dev/null || echo "")
     fi
@@ -243,7 +247,7 @@ collect_system_info() {
     } > "${info_dir}/system_basic.txt"
 
     # Hardware info
-    if [[ " ${info_types[*]:-} " =~ " hardware_info " ]]; then
+    if [[ " ${info_types[@]:-} " =~ " hardware_info " ]]; then
         {
             echo "Hardware Information"
             echo "==================="
@@ -255,7 +259,7 @@ collect_system_info() {
     fi
 
     # Disk og lagringsinfo
-    if [[ " ${info_types[*]:-} " =~ " disk_usage " ]]; then
+    if [[ " ${info_types[@]:-} " =~ " disk_usage " ]]; then
         {
             echo "Disk Usage Information"
             echo "====================="
@@ -266,7 +270,7 @@ collect_system_info() {
     fi
 
     # Nettverksinfo
-    if [[ " ${info_types[*]:-} " =~ " network_config " ]]; then
+    if [[ " ${info_types[@]:-} " =~ " network_config " ]]; then
         {
             echo "Network Configuration"
             echo "====================="
@@ -280,7 +284,7 @@ collect_system_info() {
     fi
 
     # Installerte applikasjoner
-    if [[ " ${info_types[*]:-} " =~ " installed_apps " ]]; then
+    if [[ " ${info_types[@]:-} " =~ " installed_apps " ]]; then
         {
             echo "Installed Applications"
             echo "====================="
@@ -292,21 +296,6 @@ collect_system_info() {
             ls -la "/Applications"
         } > "${info_dir}/installed_apps.txt"
     fi
-
-    # Systeminnstillinger og defaults
-    {
-        echo "System Settings and Defaults"
-        echo "==========================="
-        echo "Security Settings:"
-        system_profiler SPSecureElementDataType SPFirewallDataType
-        echo -e "\nTime Zone Settings:"
-        systemsetup -gettimezone
-        echo -e "\nPower Management Settings:"
-        pmset -g
-    } > "${info_dir}/system_settings.txt"
-
-    # Lag en komplett systemrapport med begrenset detaljnivå
-    system_profiler -detailLevel mini > "${info_dir}/full_system_report.txt"
 
     log "INFO" "Systeminfo samlet i ${info_dir}"
     return 0
@@ -349,7 +338,7 @@ calculate_backup_size() {
     if [[ "$strategy" == "comprehensive" ]]; then
         total_size=$(du -sk "${HOME}" 2>/dev/null | cut -f1)
     else
-        while IFS= read -r dir; do
+        while IFS=''read -r dir; do
             if [[ -n "$dir" && -e "${HOME}/${dir}" ]]; then
                 local dir_size
                 dir_size=$(du -sk "${HOME}/${dir}" 2>/dev/null | cut -f1)
@@ -367,13 +356,13 @@ is_excluded() {
     local strategy="$2"
     
     if [[ "$strategy" == "comprehensive" ]]; then
-        while IFS= read -r pattern; do
+        while IFS=''read -r pattern; do
             if [[ -n "$pattern" && "$path" == *"$pattern"* ]]; then
                 return 0  # Path matches exclude pattern
             fi
         done < <(yq e ".hosts.$HOSTNAME.comprehensive_exclude[]" "$YAML_FILE" 2>/dev/null)
     else
-        while IFS= read -r pattern; do
+        while IFS=''read -r pattern; do
             if [[ -n "$pattern" && "$path" == *"$pattern"* ]]; then
                 return 0  # Path matches exclude pattern
             fi

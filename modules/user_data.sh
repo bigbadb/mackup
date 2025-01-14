@@ -31,41 +31,170 @@ get_backup_strategy() {
     fi
 }
 
-# Robust backup-funksjon med retry-mekanisme
+# Robust backup-funksjon med retry-mekanisme og forbedret logging
 backup_with_retry() {
     local source="$1"
     local target="$2"
     shift 2
-    local rsync_opts=("$@")
+    local -a rsync_opts=("$@")
     local retry_count=0
     local success=false
+    local temp_log="/tmp/rsync_${RANDOM}.log"
+    local rsync_exit_code
 
-    while (( retry_count < MAX_RETRIES )) && [[ "$success" == false ]]; do
-        if rsync -ah --progress --timeout=60 "${rsync_opts[@]}" "$source/" "$target/" 2>&1 | \
-            while read -r line; do
-                if [[ "$line" =~ ^[0-9]+% ]]; then
-                    local percent=${line%\%*}
-                    update_progress "$((percent - CURRENT_PROGRESS))"
-                fi
-            done
-        then
+    log "DEBUG" "====== BACKUP WITH RETRY START ======"
+    log "DEBUG" "Kilde: $source"
+    log "DEBUG" "Mål: $target"
+    log "DEBUG" "Rsync opsjoner: ${(j:\n:)rsync_opts}"
+    
+    # Verifiser kilde
+    if [[ ! -e "$source" ]]; then
+        log "DEBUG" "FEIL: Kilde eksisterer ikke: $source"
+        return 1
+    fi
+    log "DEBUG" "OK: Kilde eksisterer"
+
+    # Verifiser målkatalog
+    local target_dir
+    if [[ -d "$target" ]]; then
+        target_dir="$target"
+    else
+        target_dir="$(dirname "$target")"
+    fi
+    
+    log "DEBUG" "Målkatalog: $target_dir"
+    if [[ ! -d "$target_dir" ]]; then
+        log "DEBUG" "Oppretter målkatalog: $target_dir"
+        mkdir -p "$target_dir" || {
+            log "DEBUG" "FEIL: Kunne ikke opprette målkatalog"
+            return 1
+        }
+    fi
+    log "DEBUG" "OK: Målkatalog eksisterer/opprettet"
+
+    # Sjekk rettigheter
+    if [[ ! -w "$target_dir" ]]; then
+        log "DEBUG" "FEIL: Mangler skrivetilgang til målkatalog"
+        return 1
+    fi
+    log "DEBUG" "OK: Har skrivetilgang til målkatalog"
+
+    # Bygg rsync-kommando
+    local rsync_cmd="rsync"
+    for opt in "${rsync_opts[@]}"; do
+        rsync_cmd+=" $opt"
+    done
+    rsync_cmd+=" \"$source\" \"$target\""
+    log "DEBUG" "Full rsync-kommando: $rsync_cmd"
+
+    # Test rsync med verbose og dry-run først
+    log "DEBUG" "Tester rsync-kommando med --dry-run..."
+    if ! rsync --dry-run -v "${rsync_opts[@]}" "$source" "$target" > "$temp_log" 2>&1; then
+        rsync_exit_code=$?
+        log "ERROR" "Rsync test feilet med kode $rsync_exit_code. Output:"
+        while IFS= read -r line; do
+            log "ERROR" "  $line"
+        done < "$temp_log"
+        rm -f "$temp_log"
+        return 1
+    fi
+    log "DEBUG" "Rsync test OK"
+
+    while (( retry_count < MAX_RETRIES )) && [[ "$success" == "false" ]]; do
+        log "DEBUG" "Forsøk $((retry_count + 1)) av $MAX_RETRIES"
+        
+        # Kjør rsync og fang både stdout og stderr
+        if eval "$rsync_cmd" > "$temp_log" 2>&1; then
+            rsync_exit_code=$?
             success=true
-            debug "Vellykket synkronisering av $source til $target"
+            log "DEBUG" "Vellykket synkronisering (exit code: $rsync_exit_code)"
+            while IFS= read -r line; do
+                log "DEBUG" "  $line"
+            done < "$temp_log"
         else
+            rsync_exit_code=$?
+            log "ERROR" "Rsync feilet med kode $rsync_exit_code"
+            log "ERROR" "Rsync feilmeldinger:"
+            while IFS= read -r line; do
+                log "ERROR" "  $line"
+            done < "$temp_log"
+
             retry_count=$((retry_count + 1))
             if (( retry_count < MAX_RETRIES )); then
-                warn "Rsync feilet for $source, forsøker igjen om $RETRY_DELAY sekunder (forsøk $retry_count av $MAX_RETRIES)"
+                log "DEBUG" "Venter $RETRY_DELAY sekunder før neste forsøk..."
                 sleep "$RETRY_DELAY"
+            else
+                log "ERROR" "Maks antall forsøk nådd ($MAX_RETRIES)"
             fi
         fi
     done
 
-    if [[ "$success" == false ]]; then
-        error "Kunne ikke kopiere $source etter $MAX_RETRIES forsøk"
-        return 1
+    rm -f "$temp_log"
+    log "DEBUG" "====== BACKUP WITH RETRY SLUTT ======"
+
+    [[ "$success" == "true" ]]
+    return $?
+}
+
+# Hjelpefunksjon for selective backup
+perform_selective_backup() {
+    local backup_dir="$1"
+    shift
+    local -a rsync_params=("$@")
+    local error_count=0
+
+    log "DEBUG" "Starter selective backup til $backup_dir"
+    log "DEBUG" "Grunnleggende rsync parametre: ${(j: :)rsync_params}"
+
+    # Lag backup-katalogen først
+    if [[ ! -d "$backup_dir" ]]; then
+        log "DEBUG" "Oppretter hovedbackup-katalog: $backup_dir"
+        mkdir -p "$backup_dir" || {
+            error "Kunne ikke opprette backup-katalog"
+            return 1
+        }
     fi
-    
-    return 0
+
+    # Les inkluderte mapper fra config
+    while IFS='' read -r item; do
+        if [[ -z "$item" ]]; then
+            continue
+        fi
+
+        log "DEBUG" "Prosesserer: $item"
+        local source="${HOME}/${item}"
+        local target="${backup_dir}/${item}"
+
+        # Sjekk om det er en fil eller katalog
+        if [[ -f "$source" ]]; then
+            log "DEBUG" "Behandler fil: $item"
+            # For filer, opprett målkatalogen og kopier filen
+            mkdir -p "$(dirname "$target")" || {
+                error "Kunne ikke opprette katalogstruktur for $item"
+                ((error_count++))
+                continue
+            }
+            cp -p "$source" "$target" || {
+                error "Kunne ikke kopiere fil: $item"
+                ((error_count++))
+                continue
+            }
+            log "DEBUG" "Fil kopiert: $item"
+        elif [[ -d "$source" ]]; then
+            log "DEBUG" "Behandler katalog: $item"
+            # For kataloger, bruk rsync
+            if ! backup_with_retry "$source/" "$target/" "${rsync_params[@]}"; then
+                warn "Feil ved backup av katalog: $item"
+                ((error_count++))
+            else
+                log "DEBUG" "Katalog synkronisert: $item"
+            fi
+        else
+            log "DEBUG" "Hopper over $item - eksisterer ikke"
+        fi
+    done < <(yq e ".include[]" "$YAML_FILE" 2>/dev/null)
+
+    return $error_count
 }
 
 # Liste ut brukermapper som vil bli sikkerhetskopiert
@@ -267,9 +396,7 @@ backup_user_data() {
     local bytes_copied=0
     local start_time
     start_time=$(date +%s)
-    local total_files
-    total_files=$(calculate_total_files)
-    init_progress "$total_files" "Kopierer filer"
+    local RSYNC_OUTPUT=""
     
     # Parse argumenter
     while [[ $# -gt 0 ]]; do
@@ -284,205 +411,151 @@ backup_user_data() {
         shift
     done
     
-    # Sett opp feilhåndtering
-    cleanup_incomplete_backup() {
-        local incomplete_dir="$1"
-        local reason="${2:-Ukjent årsak}"
-        log "WARN" "Starter opprydding av ufullstendig backup ($reason)..."
-        if [[ -d "$incomplete_dir" ]]; then
-            mv "$incomplete_dir" "${incomplete_dir}_incomplete_$(date +%Y%m%d_%H%M%S)"
-            log "INFO" "Flyttet ufullstendig backup"
-        fi
-    }
-    # Sett opp trap for å håndtere feil og avbrudd
-trap 'error "Backup avbrutt - starter opprydding"; cleanup_incomplete_backup "$backup_dir" "Avbrutt av bruker"; exit 1' INT TERM
+    # Initialiser rsync parametre som array
+    local -a rsync_params
+    rsync_params=(
+        "-ah"              # Arkiv-modus og menneskelesbar output
+        "--progress"       # Vis fremgang
+        "--stats"         # Samle statistikk
+        "--delete"        # Slett filer som ikke finnes i kilde
+        "--delete-excluded" # Slett ekskluderte filer fra backup
+    )
 
-log "INFO" "Starter backup av brukerdata til $backup_dir"
+    # Legg til dry-run hvis spesifisert
+    [[ "$dry_run" == "true" ]] && rsync_params+=("--dry-run")
 
-# Bestem backup-strategi
-local strategy
-strategy=$(get_backup_strategy)
-log "INFO" "Bruker backup-strategi: $strategy"
-
-# Sjekk strategi-endring hvis inkrementell backup
-if [[ "$incremental" == true ]]; then
-    handle_strategy_change "$strategy"
-    strategy="$BACKUP_STRATEGY"  # Oppdater strategi i tilfelle den ble endret
-fi
-
-# Opprett backup-katalog
-if [[ "$dry_run" != true ]]; then
-    mkdir -p "$backup_dir" || {
-        error "Kunne ikke opprette backup-katalog: $backup_dir"
-        return 1
-    }
-fi
-
-# Bygg rsync-parametre
-local rsync_params
-rsync_params=("${(@f)$(build_rsync_params "$strategy")}")
-rsync_params+=(
-    "--dry-run"       # Bare vis hva som ville skjedd
-    "--itemize-changes"  # Vis detaljerte endringer
-    "-v"             # Verbose output
-)
-
-# Legg til standard rsync-parametre
-rsync_params+=(
-    "-ah"              # Arkiv-modus og menneskelesbar output
-    "--progress"       # Vis fremgang
-    "--stats"          # Samle statistikk
-    "--delete"         # Slett filer som ikke finnes i kilde
-    "--delete-excluded" # Slett ekskluderte filer fra backup
-    "--info=progress2"
-)
-
-# Håndter dry-run
-[[ "$dry_run" == true ]] && rsync_params+=("--dry-run")
-
-local rsync_output
-local rsync_status
-
-if [[ "$incremental" == true ]]; then
-    if [[ -L "$LAST_BACKUP_LINK" ]]; then
-        local previous_strategy
-        previous_strategy=$(get_backup_strategy_from_path "$LAST_BACKUP_LINK")
-
-        if [[ "$strategy" == "comprehensive" && "$previous_strategy" == "selective" ]]; then
-            log "INFO" "Utfører hybrid backup (selective->comprehensive)"
-
-            local selective_params=("${rsync_params[@]}")
-            selective_params+=("--link-dest=$LAST_BACKUP_LINK")
-
-            while IFS= read -r dir; do
-                if [[ -n "$dir" ]]; then
-                    local source="${HOME}/${dir}"
-                    local target="${backup_dir}/${dir}"
-
-                    if [[ -e "$source" ]]; then
-                        if [[ "$dry_run" != true ]]; then
-                            mkdir -p "$(dirname "$target")"
-                        fi
-                        rsync_output=$(backup_with_retry "$source" "$target" "${selective_params[@]}" 2>&1) || {
-                            rsync_status=$?
-                            warn "Feil ved backup av $dir (status: $rsync_status)"
-                            echo "$rsync_output" | log "WARN"
-                            error_count=$((error_count + 1))
-                        }
-                    fi
-                fi
-            done < <(yq e ".include[]" "$YAML_FILE")
-
-            log "INFO" "Tar full backup av gjenværende filer..."
-            local comprehensive_params=("${rsync_params[@]}")
-            while IFS= read -r dir; do
-                if [[ -n "$dir" ]]; then
-                    comprehensive_params+=("--exclude=${dir}")
-                fi
-            done < <(yq e ".include[]" "$YAML_FILE")
-
-            rsync_output=$(backup_with_retry "${HOME}" "${backup_dir}" "${comprehensive_params[@]}" 2>&1) || {
-                rsync_status=$?
-                error "Comprehensive del av hybrid backup feilet (status: $rsync_status)"
-                echo "$rsync_output" | log "ERROR"
-                error_count=$((error_count + 1))
-            }
-        else
-            rsync_params+=("--link-dest=$LAST_BACKUP_LINK")
-            if [[ "$strategy" == "comprehensive" ]]; then
-                rsync_output=$(backup_with_retry "${HOME}" "${backup_dir}" "${rsync_params[@]}" 2>&1) || {
-                    rsync_status=$?
-                    error "Comprehensive backup feilet (status: $rsync_status)"
-                    echo "$rsync_output" | log "ERROR"
-                    error_count=$((error_count + 1))
-                }
-            else
-                while IFS= read -r dir; do
-                    if [[ -n "$dir" ]]; then
-                        local source="${HOME}/${dir}"
-                        local target="${backup_dir}/${dir}"
-
-                        if [[ -e "$source" ]]; then
-                            if [[ "$dry_run" != true ]]; then
-                                mkdir -p "$(dirname "$target")"
-                            fi
-                            rsync_output=$(backup_with_retry "$source" "$target" "${rsync_params[@]}" 2>&1) || {
-                                rsync_status=$?
-                                warn "Feil ved backup av $dir (status: $rsync_status)"
-                                echo "$rsync_output" | log "WARN"
-                                error_count=$((error_count + 1))
-                            }
-                        fi
-                    fi
-                done < <(yq e ".include[]" "$YAML_FILE")
-            fi
-        fi
-    else
-        warn "Inkrementell backup forespurt, men ingen tidligere backup funnet"
-        log "INFO" "Utfører full backup i stedet"
+    # Håndter inkrementell backup
+    if [[ "$incremental" == "true" && -L "$LAST_BACKUP_LINK" ]]; then
+        log "DEBUG" "Legger til link-dest for inkrementell backup"
+        rsync_params+=("--link-dest=$(readlink -f "$LAST_BACKUP_LINK")")
     fi
-else
-    if [[ "$strategy" == "comprehensive" ]]; then
-        rsync_output=$(backup_with_retry "${HOME}" "${backup_dir}" "${rsync_params[@]}" 2>&1) || {
-            rsync_status=$?
-            error "Comprehensive backup feilet (status: $rsync_status)"
-            echo "$rsync_output" | log "ERROR"
-            error_count=$((error_count + 1))
+
+    # Bestem backup-strategi og utfør backup
+    local strategy
+    strategy=$(get_backup_strategy)
+    log "DEBUG" "Bruker backup-strategi: $strategy"
+
+    log "INFO" "Starter backup av brukerdata til $backup_dir"
+    log "INFO" "Bruker backup-strategi: $strategy"
+
+    if [[ "$dry_run" != "true" ]]; then
+        mkdir -p "$backup_dir" || {
+            error "Kunne ikke opprette backup-katalog: $backup_dir"
+            return 1
         }
-    else
-        while IFS= read -r dir; do
-            if [[ -n "$dir" ]]; then
-                local source="${HOME}/${dir}"
-                local target="${backup_dir}/${dir}"
-
-                if [[ -e "$source" ]]; then
-                    if [[ "$dry_run" != true ]]; then
-                        mkdir -p "$(dirname "$target")"
-                    fi
-                    rsync_output=$(backup_with_retry "$source" "$target" "${rsync_params[@]}" 2>&1) || {
-                        rsync_status=$?
-                        warn "Feil ved backup av $dir (status: $rsync_status)"
-                        echo "$rsync_output" | log "WARN"
-                        error_count=$((error_count + 1))
-                    }
-                fi
-            fi
-        done < <(yq e ".include[]" "$YAML_FILE")
     fi
-fi
 
-if [[ -n "$rsync_output" ]]; then
-    files_processed=$(echo "$rsync_output" | grep "Number of files transferred" | awk '{print $5}')
-    bytes_copied=$(echo "$rsync_output" | grep "Total transferred file size" | awk '{print $5}')
-fi
+    # Utfør backup basert på strategi
+    if [[ "$strategy" == "comprehensive" ]]; then
+        # Legg til exclude/include mønstre for comprehensive backup
+        while IFS='' read -r pattern; do
+            [[ -n "$pattern" ]] && rsync_params+=("--exclude=$pattern")
+        done < <(yq e ".comprehensive_exclude[]" "$YAML_FILE" 2>/dev/null)
+        
+        while IFS='' read -r pattern; do
+            [[ -n "$pattern" ]] && rsync_params+=("--include=$pattern")
+        done < <(yq e ".force_include[]" "$YAML_FILE" 2>/dev/null)
 
-if [[ "$dry_run" != true ]]; then
-    save_backup_metadata "$backup_dir" "$strategy"
-fi
+        # Utfør comprehensive backup
+        log "DEBUG" "Starter comprehensive backup med parametre: ${(j: :)rsync_params}"
+        if ! backup_with_retry "${HOME}/" "${backup_dir}/" "${rsync_params[@]}"; then
+            error_count=$((error_count + 1))
+        fi
+    else
+        # Utfør selective backup med den nye funksjonen
+        log "DEBUG" "Starter selective backup"
+        if ! perform_selective_backup "$backup_dir" "${rsync_params[@]}"; then
+            error_count=$((error_count + 1))
+        fi
+    fi
 
-local end_time
-end_time=$(date +%s)
-local duration=$((end_time - start_time))
-local formatted_duration
-formatted_duration=$(format_time "$duration")
+    # Håndter spesialtilfeller hvis konfigurert
+    if [[ "${CONFIG_HAS_SPECIAL_CASES:-false}" == "true" ]]; then
+        log "DEBUG" "Håndterer spesialtilfeller"
+        if ! handle_special_cases "$HOSTNAME" "$backup_dir"; then 
+            error_count=$((error_count + 1))
+        fi
+    fi
 
-{
-    log "INFO" "Backup fullført med følgende statistikk:"
-    log "INFO" "- Filer prosessert: ${files_processed:-0}"
-    log "INFO" "- Bytes kopiert: ${bytes_copied:-0}"
-    log "INFO" "- Feil oppstått: $error_count"
-    log "INFO" "- Varighet: $duration sekunder"
+    # Lagre metadata hvis ikke dry-run
+    if [[ "$dry_run" != "true" ]]; then
+        save_backup_metadata "$backup_dir" "$strategy" "$start_time" "$(date +%s)"
+    fi
+
+    # Samle statistikk og vis oppsummering
+    local end_time
+    end_time=$(date +%s)
+    local duration=$((end_time - start_time))
+
+    if [[ -n "$RSYNC_OUTPUT" ]]; then
+        files_processed=$(echo "$RSYNC_OUTPUT" | grep "Number of files transferred" | awk '{print $5}')
+        bytes_copied=$(echo "$RSYNC_OUTPUT" | grep "Total transferred file size" | awk '{print $5}')
+    fi
+
+    show_backup_summary "$duration" "$files_processed" "$bytes_copied" "$error_count" "$backup_dir"
+
+    return $((error_count > 0))
 }
 
-show_summary "Backup Fullført" \
-    "Tid brukt: $formatted_duration" \
-    "Filer prosessert: ${files_processed:-0}" \
-    "Bytes kopiert: ${bytes_copied:-0}" \
-    "Total størrelse: $(du -sh "$backup_dir" | cut -f1)"
+# Hjelpefunksjon for selective backup
+perform_selective_backup() {
+    emulate -L zsh
+    setopt LOCAL_OPTIONS PIPE_FAIL
 
-trap - ERR INT TERM
+    local backup_dir="$1"
+    shift
+    typeset -a rsync_params
+    rsync_params=("$@")
+    local error_count=0
 
-return $((error_count > 0))
+    debug "Starter selective backup til $backup_dir"
+    debug "Grunnleggende rsync parametre: ${(j: :)rsync_params}"
+
+    # Lag backup-katalogen først
+    if [[ ! -d "$backup_dir" ]]; then
+        debug "Oppretter hovedbackup-katalog: $backup_dir"
+        mkdir -p "$backup_dir" || {
+            error "Kunne ikke opprette backup-katalog"
+            return 1
+        }
+    fi
+
+    # Les inkluderte mapper fra config
+    while IFS='' read -r dir; do
+        if [[ -z "$dir" ]]; then
+            continue
+        fi
+
+        debug "Prosesserer katalog: $dir"
+        local source="${HOME}/${dir}"
+        local target="${backup_dir}/${dir}"
+
+        # Sjekk om kilden eksisterer
+        if [[ ! -e "$source" ]]; then
+            debug "Hopper over $dir - eksisterer ikke"
+            continue
+        fi
+
+        # Opprett målkatalogstruktur
+        if [[ ! -d "$(dirname "$target")" ]]; then
+            debug "Oppretter målkatalogstruktur for: $dir"
+            mkdir -p "$(dirname "$target")" || {
+                error "Kunne ikke opprette katalogstruktur for $dir"
+                continue
+            }
+        fi
+
+        # Utfør backup av denne katalogen
+        debug "Starter backup av $dir"
+        if ! backup_with_retry "$source" "$target" "${rsync_params[@]}"; then
+            warn "Feil ved backup av $dir"
+            ((error_count++))
+        else
+            debug "Vellykket backup av $dir"
+        fi
+    done < <(yq e ".include[]" "$YAML_FILE" 2>/dev/null)
+
+    return $error_count
 }
 
 # Hjelpefunksjon for å utføre selve backupen
@@ -540,32 +613,46 @@ show_backup_summary() {
         "Total størrelse: $(du -sh "$backup_dir" 2>/dev/null | cut -f1)"
 }
 
-# Funksjon for å liste hvilke filer som vil bli inkludert
+# Funksjon for å liste hvilke filer som vil bli inkludert i backup
 preview_backup() {
     local strategy
     strategy=$(get_backup_strategy)
     local incremental="${INCREMENTAL:-false}"
 
-    log "Previewing backup (strategy: $strategy, incremental: $incremental)"
+    log "INFO" "Forhåndsviser backup (strategi: $strategy, inkrementell: $incremental)"
 
+    # Basis rsync-parametre for preview
     local -a rsync_params=(
-        "-ah"
-        "--dry-run"
-        "--list-only"
-        "--human-readable"
-        "--dirs-only"
-        "--max-depth=2"
+        "-ahn"             # -a for arkiv, -h for human-readable, -n for dry-run
+        "--itemize-changes" # Vis detaljerte endringer
+        "--list-only"      # Bare list filer, ikke prøv å kopiere
     )
 
-    if [[ "$incremental" == true && -L "$LAST_BACKUP_LINK" ]]; then
-        rsync_params+=("--link-dest=$(readlink -f "$LAST_BACKUP_LINK")")
-    fi
-
+    echo "====================== BACKUP PREVIEW ======================"
     if [[ "$strategy" == "comprehensive" ]]; then
-        perform_rsync rsync_params "${HOME}/" "/dev/null"
+        log "INFO" "Viser filer som vil bli inkludert (comprehensive backup)"
+        rsync "${rsync_params[@]}" "${HOME}/" .
     else
-        for directory in $(get_included_directories); do
-            perform_rsync rsync_params "${HOME}/${directory}" "/dev/null"
-        done
+        log "INFO" "Viser filer som vil bli inkludert (selective backup)"
+        while IFS='' read -r item; do
+            if [[ -z "$item" ]]; then
+                continue
+            fi
+
+            local source="${HOME}/${item}"
+            echo "=== Innhold i $item ==="
+
+            if [[ -f "$source" ]]; then
+                # For filer, vis bare filinfo
+                ls -lh "$source"
+            elif [[ -d "$source" ]]; then
+                # For kataloger, bruk rsync med --list-only
+                rsync "${rsync_params[@]}" "${source}/" .
+            else
+                echo "Finnes ikke: $item"
+            fi
+            echo
+        done < <(yq e ".include[]" "$YAML_FILE" 2>/dev/null)
     fi
+    echo "========================================================="
 }

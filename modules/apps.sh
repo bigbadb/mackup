@@ -1,10 +1,10 @@
-#!/usr/bin/env bash
+#!/usr/bin/env zsh
 
 # =============================================================================
 # Modul for backup av applikasjoner
 # =============================================================================
 
-source "${MODULES_DIR}/config.sh"
+. "${MODULES_DIR}/config.sh"
 
 backup_apps() {
     local backup_dir="$1"
@@ -47,7 +47,7 @@ restore_apps() {
     grep -A9999 "^# Homebrew Formulae" "$manifest_file" | \
     grep -B9999 "^## CASKS" | \
     grep -v "^#" | \
-    while read -r formula; do
+    while IFS='' read -r formula; do
         [[ -n "$formula" ]] && brew install "$formula"
     done
     
@@ -56,7 +56,7 @@ restore_apps() {
     grep -A9999 "^## CASKS" "$manifest_file" | \
     grep -B9999 "^###" | \
     grep -v "^#" | \
-    while read -r cask; do
+    while IFS='' read -r cask; do
         [[ -n "$cask" ]] && brew install --cask "$cask"
     done
     
@@ -65,7 +65,7 @@ restore_apps() {
     grep -A9999 "^### Nye CASKS" "$manifest_file" | \
     grep -B9999 "^####" | \
     grep -v "^#" | \
-    while read -r cask; do
+    while IFS='' read -r cask; do
         [[ -n "$cask" ]] && brew install --cask "$cask"
     done
     
@@ -74,7 +74,7 @@ restore_apps() {
         log "WARN" "Følgende applikasjoner må installeres manuelt:"
         grep -A9999 "^##### Manuelle installasjoner" "$manifest_file" | \
         grep -v "^#" | \
-        while read -r app; do
+        while IFS='' read -r app; do
             [[ -n "$app" ]] && log "INFO" "- $app"
         done
     fi

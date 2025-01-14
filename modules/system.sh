@@ -1,5 +1,5 @@
-#!/usr/bin/env bash
-source "${MODULES_DIR}/config.sh"
+#!/usr/bin/env zsh
+. "${MODULES_DIR}/config.sh"
 # =============================================================================
 # Modul for backup av systemfiler
 # =============================================================================
@@ -14,7 +14,7 @@ backup_system() {
     # Last system files fra YAML eller bruk defaults
     if [[ -f "$YAML_FILE" ]]; then
         # macOS-kompatibel versjon av array-populering
-        while IFS= read -r file; do
+        while IFS='' read -r file; do
             [[ -n "$file" ]] && system_files+=("$file")
         done < <(yq e ".hosts.$HOSTNAME.system_files[]" "$YAML_FILE" 2>/dev/null || echo "")
     fi

@@ -1,8 +1,11 @@
-#!/usr/bin/env bash
+#!/usr/bin/env zsh
 
 # =============================================================================
 # Modulært Backup Script med YAML-konfigurasjon
 # =============================================================================
+setopt extendedglob
+setopt NO_nomatch
+setopt NULL_GLOB
 
 # Strict error handling
 set -euo pipefail
@@ -11,7 +14,7 @@ IFS=$'\n\t'
 # =============================================================================
 # Konstanter og Konfigurasjon
 # =============================================================================
-readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+readonly SCRIPT_DIR="${0:A:h}"
 readonly BACKUP_BASE_DIR="${SCRIPT_DIR}/backups"
 readonly TIMESTAMP=$(date +%Y%m%d-%H%M%S)
 readonly BACKUP_DIR="${BACKUP_BASE_DIR}/backup-${TIMESTAMP}"
@@ -20,22 +23,39 @@ readonly MODULES_DIR="${SCRIPT_DIR}/modules"
 readonly YAML_FILE="${SCRIPT_DIR}/config.yaml"
 readonly DEFAULT_CONFIG="${SCRIPT_DIR}/default-config.yaml"
 readonly LAST_BACKUP_LINK="${BACKUP_BASE_DIR}/last_backup"
-readonly REQUIRED_SPACE=2000000  # 2GB i KB
+readonly REQUIRED_SPACE=10000000  # 10GB i KB
+
+# System-relaterte konstanter
+readonly HOSTNAME=$(scutil --get LocalHostName 2>/dev/null || hostname)
+export HOSTNAME  # Gjør tilgjengelig for alle moduler
+
+# Metadata-relaterte konstanter
+readonly METADATA_FILE="backup-metadata"
+readonly METADATA_VERSION="1.1"
+readonly CHECKSUM_FILE="checksums.md5"
+readonly METADATA_SCHEMA_VERSION="1.0"
+
+# Vedlikeholdsrelaterte konstanter
+readonly MAX_RETRIES=3
+readonly RETRY_DELAY=5
+readonly MAX_BACKUPS=10
+readonly COMPRESSION_AGE=7  # dager før komprimering
+readonly BACKUP_RETENTION=30  # dager å beholde backups
 
 # Standardverdier
-DRY_RUN=false
-HELP_FLAG=false
-INCREMENTAL=false
-EXCLUDES=()
-INCLUDE=()
-DEBUG=false
-LIST_BACKUPS_FLAG=false
-VERIFY_FLAG=false
-PREVIEW_FLAG=false
-BACKUP_STRATEGY=""
-RESTORE_NAME=""
-CONFIG_WIZARD=false
-FIRST_TIME_SETUP=false 
+typeset -g DRY_RUN=false
+typeset -g HELP_FLAG=false
+typeset -g INCREMENTAL=false
+typeset -ga EXCLUDES
+typeset -ga INCLUDE
+typeset -g DEBUG=false
+typeset -g LIST_BACKUPS_FLAG=false
+typeset -g VERIFY_FLAG=false
+typeset -g PREVIEW_FLAG=false
+typeset -g BACKUP_STRATEGY=""
+typeset -g RESTORE_NAME=""
+typeset -g CONFIG_WIZARD=false
+typeset -g FIRST_TIME_SETUP=false
 
 # Opprett loggkatalog
 mkdir -p "$LOG_DIR"
@@ -53,38 +73,76 @@ if [[ ! -f "${MODULES_DIR}/utils.sh" ]]; then
 fi
 source "${MODULES_DIR}/utils.sh"
 
-# Last resten av modulene
+# Last nødvendige moduler
 load_modules() {
-    local required_modules=(
+    log "DEBUG" "Starter lasting av moduler..."
+    
+    local -a required_modules=(
+        "utils.sh"
         "config.sh"
         "user_data.sh"
         "maintenance.sh"
         "scan_apps.sh"
-    )
-    local optional_modules=(
-        "apps.sh"
         "system.sh"
+        "apps.sh"
     )
     
-    # Last påkrevde moduler
     for module in "${required_modules[@]}"; do
         if [[ ! -f "${MODULES_DIR}/${module}" ]]; then
             error "Påkrevd modul mangler: ${module}"
             return 1
         fi
-        debug "Laster påkrevd modul: ${module}"
-        source "${MODULES_DIR}/${module}"
+        log "DEBUG" "Laster modul: ${module}"
+        source "${MODULES_DIR}/${module}" || {
+            error "Kunne ikke laste modul: ${module}"
+            return 1
+        }
     done
     
-    # Last valgfrie moduler
-    for module in "${optional_modules[@]}"; do
-        if [[ -f "${MODULES_DIR}/${module}" ]]; then
-            debug "Laster valgfri modul: ${module}"
-            source "${MODULES_DIR}/${module}"
-        else
-            warn "Valgfri modul ikke funnet: ${module}"
-        fi
-    done
+    log "DEBUG" "Alle moduler lastet"
+    return 0
+}
+
+# Verifiser at en funksjon eksisterer
+verify_function() {
+    local func_name="$1"
+    if ! typeset -f "$func_name" > /dev/null; then
+        error "Funksjon mangler: $func_name"
+        return 1
+    fi
+    return 0
+}
+
+# Oppdatert create_backup funksjon med verifikasjon
+create_backup() {
+    local backup_status=0
+
+    # Verifiser at nødvendige funksjoner er tilgjengelige
+    verify_function "backup_user_data" || return 1
+    verify_function "backup_apps" || return 1
+    verify_function "collect_system_info" || return 1
+
+    # Sjekk tilgjengelig diskplass før vi starter
+    if ! check_disk_space "$REQUIRED_SPACE"; then
+        error "Ikke nok diskplass tilgjengelig"
+        return 1
+    fi
+
+    # Opprett backup-katalog
+    if [[ "$DRY_RUN" != true ]]; then
+        mkdir -p "$BACKUP_DIR" || {
+            error "Kunne ikke opprette backup-katalog: $BACKUP_DIR"
+            return 1
+        }
+    fi
+
+    # Backup av brukerdata
+    if ! backup_user_data "$BACKUP_DIR" $([[ "$DRY_RUN" == true ]] && echo "--dry-run") $([[ "$INCREMENTAL" == true ]] && echo "--incremental"); then
+        backup_status=$((backup_status + 1))
+        error "Feil under backup av brukerdata"
+    fi
+
+    return $backup_status
 }
 
 # =============================================================================
@@ -284,8 +342,8 @@ parse_arguments() {
         shift
     done
     
-   # Legg til validering for gjensidig utelukkende flagg
-    local exclusive_count=0
+    # Legg til validering for gjensidig utelukkende flagg
+    local -i exclusive_count=0
     [[ "$CONFIG_WIZARD" == true ]] && ((exclusive_count++))
     [[ "$FIRST_TIME_SETUP" == true ]] && ((exclusive_count++))
     [[ "$LIST_BACKUPS_FLAG" == true ]] && ((exclusive_count++))
@@ -366,15 +424,17 @@ main() {
     
 # Sjekk backup-strategi
 if [[ -z "$BACKUP_STRATEGY" ]]; then
-    if [[ -f "$YAML_FILE" ]]; then
-        # Bruk strategi fra YAML hvis ikke spesifisert via argument
+    if [[ -z "$CONFIG_STRATEGY" ]] && [[ -f "$YAML_FILE" ]]; then
+        # Bruk YAML-strategi kun hvis ingen andre er satt
         BACKUP_STRATEGY=$(yq e ".backup_strategy" "$YAML_FILE")
+    else
+        BACKUP_STRATEGY="$CONFIG_STRATEGY"
     fi
+fi
 
-    if [[ -z "$BACKUP_STRATEGY" ]]; then
-        feil "Ingen backup-strategi spesifisert. Bruk -s, -sc eller -ss"
-        avslutt 1
-    fi
+if [[ -z "$BACKUP_STRATEGY" ]]; then
+    error "Ingen backup-strategi spesifisert. Bruk -s, -sc eller -ss"
+    exit 1
 fi
     
     # Håndter strategi-endringer
@@ -469,6 +529,6 @@ fi
 }
 
 # Start scriptet hvis det kjøres direkte
-if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+if [[ "$ZSH_EVAL_CONTEXT" == "toplevel" ]]; then
     main "$@"
 fi
