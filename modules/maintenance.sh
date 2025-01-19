@@ -207,16 +207,16 @@ get_backup_strategy_from_path() {
 verify_backup() {
     local backup_dir="$1"
     local verified=true
-    local checksum_file="${backup_dir}/${CHECKSUM_FILE}"
-    
+    local checksum_file="${backup_dir}/${CHECKSUM_FILE:-checksums.md5}"
+
     log "INFO" "Starter verifikasjon av backup i ${backup_dir}..."
-    
+
     # Sjekk at backup-katalogen eksisterer
     if [[ ! -d "$backup_dir" ]]; then
         error "Backup-katalogen eksisterer ikke: ${backup_dir}"
         return 1
     fi
-    
+
     # Verifiser integritet av hver fil
     find "$backup_dir" -type f ! -name "$CHECKSUM_FILE" ! -name "$METADATA_FILE" | while IFS='' read -r filename; do
         if ! verify_file_integrity "$filename" "full"; then

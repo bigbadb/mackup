@@ -72,13 +72,14 @@ if [[ ! -f "${MODULES_DIR}/utils.sh" ]]; then
     exit 1
 fi
 source "${MODULES_DIR}/utils.sh"
+#source "${MODULES_DIR}/config.sh"
+#source "${MODULES_DIR}/user_data.sh"
 
 # Last nødvendige moduler
 load_modules() {
     log "DEBUG" "Starter lasting av moduler..."
     
     local -a required_modules=(
-        "utils.sh"
         "config.sh"
         "user_data.sh"
         "maintenance.sh"
@@ -312,6 +313,9 @@ parse_arguments() {
                     exit 1
                 fi
                 ;;
+            --list-excludes)
+                LIST_EXCLUDES=true
+                ;;
             --restore=*)
                 RESTORE_NAME="${1#*=}"
                 ;;
@@ -357,6 +361,7 @@ parse_arguments() {
     fi
 }
 
+
 # =============================================================================
 # Hovedfunksjon
 # =============================================================================
@@ -384,7 +389,16 @@ main() {
         run_config_wizard "$YAML_FILE"
         exit 0
     fi
-    
+    # Håndter list-excludes
+    if [[ "${LIST_EXCLUDES:-false}" == true ]]; then
+        log "INFO" "Ekskluderte mønstre:"
+        if [[ "$BACKUP_STRATEGY" == "comprehensive" ]]; then
+            yq e ".comprehensive_exclude[]" "$YAML_FILE"
+        else
+            yq e ".exclude[]" "$YAML_FILE"
+        fi
+        exit 0
+    fi
     # Håndter førstegangsoppsett
     if [[ "${FIRST_TIME_SETUP:-false}" == true ]]; then
         if [[ ! -f "$YAML_FILE" ]]; then

@@ -46,14 +46,17 @@ backup_with_retry() {
     log "DEBUG" "Kilde: $source"
     log "DEBUG" "Mål: $target"
     log "DEBUG" "Rsync opsjoner: ${(j:\n:)rsync_opts}"
-    
-    # Verifiser kilde
+
+    # Progress tracking
+    local total_files=$(find "$source" -type f 2>/dev/null | wc -l)
+    init_progress "$total_files" "Backup"
+
+    # Eksisterende sjekker
     if [[ ! -e "$source" ]]; then
         log "DEBUG" "FEIL: Kilde eksisterer ikke: $source"
         return 1
-    fi
-    log "DEBUG" "OK: Kilde eksisterer"
-
+    }
+    
     # Verifiser målkatalog
     local target_dir
     if [[ -d "$target" ]]; then
@@ -62,7 +65,6 @@ backup_with_retry() {
         target_dir="$(dirname "$target")"
     fi
     
-    log "DEBUG" "Målkatalog: $target_dir"
     if [[ ! -d "$target_dir" ]]; then
         log "DEBUG" "Oppretter målkatalog: $target_dir"
         mkdir -p "$target_dir" || {
@@ -70,54 +72,44 @@ backup_with_retry() {
             return 1
         }
     fi
-    log "DEBUG" "OK: Målkatalog eksisterer/opprettet"
 
-    # Sjekk rettigheter
     if [[ ! -w "$target_dir" ]]; then
         log "DEBUG" "FEIL: Mangler skrivetilgang til målkatalog"
         return 1
-    fi
-    log "DEBUG" "OK: Har skrivetilgang til målkatalog"
+    }
 
-    # Bygg rsync-kommando
-    local rsync_cmd="rsync"
-    for opt in "${rsync_opts[@]}"; do
-        rsync_cmd+=" $opt"
-    done
-    rsync_cmd+=" \"$source\" \"$target\""
-    log "DEBUG" "Full rsync-kommando: $rsync_cmd"
-
-    # Test rsync med verbose og dry-run først
+    # Test rsync med dry-run først
     log "DEBUG" "Tester rsync-kommando med --dry-run..."
     if ! rsync --dry-run -v "${rsync_opts[@]}" "$source" "$target" > "$temp_log" 2>&1; then
         rsync_exit_code=$?
         log "ERROR" "Rsync test feilet med kode $rsync_exit_code. Output:"
-        while IFS= read -r line; do
+        cat "$temp_log" | while IFS= read -r line; do
             log "ERROR" "  $line"
-        done < "$temp_log"
+        done
         rm -f "$temp_log"
         return 1
-    fi
-    log "DEBUG" "Rsync test OK"
+    }
 
     while (( retry_count < MAX_RETRIES )) && [[ "$success" == "false" ]]; do
         log "DEBUG" "Forsøk $((retry_count + 1)) av $MAX_RETRIES"
         
-        # Kjør rsync og fang både stdout og stderr
-        if eval "$rsync_cmd" > "$temp_log" 2>&1; then
+        if rsync "${rsync_opts[@]}" "$source" "$target" 2>&1 | tee "$temp_log" | while IFS= read -r line; do
+            if [[ "$line" =~ ^[0-9]+% ]]; then
+                local current_file=$(echo "$line" | grep -o '[^ ]*$')
+                update_progress 1 "$current_file"
+            fi
+        done; then
             rsync_exit_code=$?
             success=true
+            RSYNC_OUTPUT=$(cat "$temp_log")
             log "DEBUG" "Vellykket synkronisering (exit code: $rsync_exit_code)"
-            while IFS= read -r line; do
-                log "DEBUG" "  $line"
-            done < "$temp_log"
         else
             rsync_exit_code=$?
             log "ERROR" "Rsync feilet med kode $rsync_exit_code"
             log "ERROR" "Rsync feilmeldinger:"
-            while IFS= read -r line; do
+            cat "$temp_log" | while IFS= read -r line; do
                 log "ERROR" "  $line"
-            done < "$temp_log"
+            done
 
             retry_count=$((retry_count + 1))
             if (( retry_count < MAX_RETRIES )); then
@@ -347,21 +339,36 @@ build_rsync_params() {
     if [[ "$strategy" == "comprehensive" ]]; then
         # Legg til exclude-mønstre
         while IFS= read -r pattern; do
-            [[ -n "$pattern" ]] && params+=("--exclude=$pattern")
+            if [[ -n "$pattern" ]]; then
+                # Håndter relative stier og wildcards
+                pattern="${pattern/#\~/$HOME}"
+                # Sørg for at **/ fungerer korrekt med rsync
+                pattern="${pattern/#\*\*\//\*\*}"
+                params+=("--exclude=$pattern")
+            fi
         done < <(yq e ".comprehensive_exclude[]" "$YAML_FILE" 2>/dev/null)
         
         # Legg til force-include mønstre
         while IFS= read -r pattern; do
-            [[ -n "$pattern" ]] && params+=("--include=$pattern")
+            if [[ -n "$pattern" ]]; then
+                pattern="${pattern/#\~/$HOME}"
+                params+=("--include=$pattern")
+            fi
         done < <(yq e ".force_include[]" "$YAML_FILE" 2>/dev/null)
     else
         # For selective backup, bruk include/exclude lister
         while IFS= read -r pattern; do
-            [[ -n "$pattern" ]] && params+=("--include=$pattern")
+            if [[ -n "$pattern" ]]; then
+                pattern="${pattern/#\~/$HOME}"
+                params+=("--include=$pattern")
+            fi
         done < <(yq e ".include[]" "$YAML_FILE" 2>/dev/null)
         
         while IFS= read -r pattern; do
-            [[ -n "$pattern" ]] && params+=("--exclude=$pattern")
+            if [[ -n "$pattern" ]]; then
+                pattern="${pattern/#\~/$HOME}"
+                params+=("--exclude=$pattern")
+            fi
         done < <(yq e ".exclude[]" "$YAML_FILE" 2>/dev/null)
     fi
 
@@ -391,13 +398,13 @@ backup_user_data() {
     shift
     local dry_run=false
     local incremental=false
-    local error_count=0
-    local files_processed=0
+    local excluded_count=0
+    local excluded_size=0
     local bytes_copied=0
-    local start_time
-    start_time=$(date +%s)
-    local RSYNC_OUTPUT=""
-    
+    local files_processed=0
+    local start_time=$(date +%s)
+
+
     # Parse argumenter
     while [[ $# -gt 0 ]]; do
         case "$1" in
@@ -419,10 +426,14 @@ backup_user_data() {
         "--stats"         # Samle statistikk
         "--delete"        # Slett filer som ikke finnes i kilde
         "--delete-excluded" # Slett ekskluderte filer fra backup
+        "--info=progress2,skip2"
     )
 
     # Legg til dry-run hvis spesifisert
-    [[ "$dry_run" == "true" ]] && rsync_params+=("--dry-run")
+    if [[ "$dry_run" == true ]]; then
+        rsync_params+=("--stats" "--info=skip2")
+    fi
+
 
     # Håndter inkrementell backup
     if [[ "$incremental" == "true" && -L "$LAST_BACKUP_LINK" ]]; then
@@ -477,6 +488,13 @@ backup_user_data() {
         fi
     fi
 
+    if [[ -n "$RSYNC_OUTPUT" ]]; then
+        excluded_count=$(echo "$RSYNC_OUTPUT" | grep "Number of files excluded:" | awk '{print $5}')
+        excluded_size=$(echo "$RSYNC_OUTPUT" | grep "Total transferred file size:" | awk '{print $5}')
+        files_processed=$(echo "$RSYNC_OUTPUT" | grep "Number of files transferred:" | awk '{print $5}')
+        bytes_copied=$(echo "$RSYNC_OUTPUT" | grep "Total bytes sent:" | awk '{print $4}')
+    fi
+
     # Lagre metadata hvis ikke dry-run
     if [[ "$dry_run" != "true" ]]; then
         save_backup_metadata "$backup_dir" "$strategy" "$start_time" "$(date +%s)"
@@ -492,7 +510,7 @@ backup_user_data() {
         bytes_copied=$(echo "$RSYNC_OUTPUT" | grep "Total transferred file size" | awk '{print $5}')
     fi
 
-    show_backup_summary "$duration" "$files_processed" "$bytes_copied" "$error_count" "$backup_dir"
+    show_backup_summary "$(date +%s)" "$files_processed" "$bytes_copied" "$error_count" "$excluded_count" "$excluded_size" "$backup_dir"
 
     return $((error_count > 0))
 }
@@ -598,11 +616,15 @@ show_backup_summary() {
     local files_processed="$2"
     local bytes_copied="$3"
     local error_count="$4"
-    local backup_dir="$5"
+    local excluded_count="$5"
+    local excluded_size="$6"
+    local backup_dir="$7"
 
     log "INFO" "Backup fullført med følgende statistikk:"
     log "INFO" "- Filer prosessert: ${files_processed:-0}"
     log "INFO" "- Bytes kopiert: ${bytes_copied:-0}"
+    log "INFO" "- Filer ekskludert: ${excluded_count:-0}"
+    log "INFO" "- Ekskludert størrelse: ${excluded_size:-0}"
     log "INFO" "- Feil oppstått: $error_count"
     log "INFO" "- Varighet: $duration sekunder"
 
@@ -610,6 +632,7 @@ show_backup_summary() {
         "Tid brukt: $(format_time "$duration")" \
         "Filer prosessert: ${files_processed:-0}" \
         "Bytes kopiert: ${bytes_copied:-0}" \
+        "Filer ekskludert: ${excluded_count:-0}" \
         "Total størrelse: $(du -sh "$backup_dir" 2>/dev/null | cut -f1)"
 }
 

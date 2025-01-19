@@ -78,44 +78,45 @@ init_progress() {
 # Tegner en progress bar
 draw_progress_bar() {
     local percent=$1
+    local eta=$2
+    local current_file="${3:-}"
     local width=$PROGRESS_WIDTH
     local completed=$((width * percent / 100))
     local remaining=$((width - completed))
     
-    # Beregn estimert gjenværende tid
-    local elapsed=$(($(date +%s) - PROGRESS_START_TIME))
-    local eta="?"
-    if [[ $percent -gt 0 ]]; then
-        eta=$((elapsed * (100 - percent) / percent))
-        eta=$(format_time "$eta")
-    fi
-    
-    # Tegn progress bar med farger
-    echo -ne "\033[u\033[K"  # Gå tilbake til lagret posisjon og clear linje
+    # Tegn progress bar
+    echo -ne "\033[u\033[K"  # Gå tilbake og clear linje
     echo -ne "\r["
-    echo -ne "\033[32m"  # Grønn farge for fullført
+    echo -ne "\033[32m"  # Grønn for fullført
     for ((i=0; i<completed; i++)); do echo -n "="; done
-    echo -ne "\033[33m"  # Gul farge for cursor
+    echo -ne "\033[33m"  # Gul for cursor
     [[ $completed -lt $width ]] && echo -n ">"
-    echo -ne "\033[37m"  # Hvit farge for gjenværende
+    echo -ne "\033[37m"  # Hvit for gjenværende
     for ((i=completed+1; i<width; i++)); do echo -n " "; done
     echo -ne "\033[0m"  # Reset farge
     echo -n "] "
     printf "%3d%% " "$percent"
     echo -n "[$CURRENT_PHASE] "
-    echo -n "ETA: $eta"
+    echo -n "ETA: $(format_time "$eta") "
+    [[ -n "$current_file" ]] && echo -n "Fil: ${current_file##*/}"
 }
 
-# Oppdaterer progress
+# Oppdaterer framdrift
 update_progress() {
     local increment="${1:-1}"
+    local current_file="$2"
     PROCESSED_FILES=$((PROCESSED_FILES + increment))
     
     if [[ $TOTAL_FILES -gt 0 ]]; then
         local new_progress=$((PROCESSED_FILES * 100 / TOTAL_FILES))
         if [[ $new_progress != "$CURRENT_PROGRESS" ]]; then
             CURRENT_PROGRESS=$new_progress
-            [[ "$PROGRESS_ENABLED" == true ]] && draw_progress_bar "$CURRENT_PROGRESS"
+            local elapsed=$(($(date +%s) - PROGRESS_START_TIME))
+            local eta="?"
+            if ((PROCESSED_FILES > 0)); then
+                eta=$((elapsed * (TOTAL_FILES - PROCESSED_FILES) / PROCESSED_FILES))
+            fi
+            draw_progress_bar "$new_progress" "$eta" "$current_file"
         fi
     fi
 }
@@ -298,6 +299,17 @@ collect_system_info() {
     fi
 
     log "INFO" "Systeminfo samlet i ${info_dir}"
+    return 0
+}
+
+check_network_path() {
+    local path="$1"
+    if [[ "$path" =~ ^// || "$path" =~ ^smb:// ]]; then
+        if ! ping -c1 -W2 "$(echo "$path" | cut -d'/' -f3)" &>/dev/null; then
+            warn "Nettverkssti $path er ikke tilgjengelig"
+            return 1
+        fi
+    fi
     return 0
 }
 

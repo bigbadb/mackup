@@ -4,15 +4,26 @@
 # Utvidet Test Suite for Backup System
 # =============================================================================
 
-set -euo pipefail
-
 # Globale variabler for testing
 readonly SCRIPT_DIR="${0:A:h}"
 readonly MODULES_DIR="${SCRIPT_DIR}/modules"
+source "${MODULES_DIR}/config.sh"
+source "${MODULES_DIR}/utils.sh"
+source "${MODULES_DIR}/maintenance.sh"
 readonly TEST_DIR="$(mktemp -d)"
 readonly TEST_BACKUP_BASE="${TEST_DIR}/backups"
 readonly TEST_LOG_DIR="${TEST_BACKUP_BASE}/logs"
 readonly TEST_HOSTNAME="$(scutil --get LocalHostName 2>/dev/null || hostname)"
+readonly CHECKSUM_FILE="checksums.md5"
+readonly METADATA_FILE="backup-metadata"
+readonly METADATA_VERSION="1.1"
+
+readonly MAX_BACKUPS="${CONFIG_MAX_BACKUPS}"
+readonly COMPRESSION_AGE="${CONFIG_COMPRESSION_AGE}" 
+readonly BACKUP_RETENTION="${CONFIG_BACKUP_RETENTION}"
+
+
+set -euo pipefail
 
 # Test statistikk
 typeset -i TESTS_RUN=0
@@ -31,30 +42,25 @@ readonly NC='\033[0m'
 
 setup() {
     echo "Setter opp testmiljø..."
-    mkdir -p "${TEST_BACKUP_BASE}/logs"
+    if ! mkdir -p "${TEST_BACKUP_BASE}/logs"; then
+        error "Kunne ikke opprette testkataloger"
+        return 1
+    fi
     
-    # Sørg for at vi har et rent testmiljø
-    rm -f "${TEST_DIR}"/*.yaml
+    # Slett eventuelle gamle testfiler
+    rm -f "${TEST_DIR}"/*.yaml 2>/dev/null
     
-    # Verifiser at nødvendige filer eksisterer
-    typeset -a required_files
-    required_files=(
-        "${MODULES_DIR}/maintenance.sh"
-        "${MODULES_DIR}/utils.sh"
-        "${MODULES_DIR}/config.sh"
-    )
-    
-    local missing_files=0
-    for file in "${required_files[@]}"; do
-        if [[ ! -f "$file" ]]; then
-            echo "ERROR: Påkrevd fil mangler: $file"
-            missing_files=$((missing_files + 1))
+    # Verifiser moduler med forbedret feilhåndtering
+    local -a missing=()
+    for module in maintenance.sh utils.sh config.sh; do
+        if [[ ! -f "${MODULES_DIR}/${module}" ]]; then
+            missing+=("$module")
         fi
     done
-
-    if ((missing_files > 0)); then
-        echo "Fant $missing_files manglende filer. Avslutter."
-        exit 1
+    
+    if ((${#missing[@]} > 0)); then
+        error "Manglende moduler: ${(j:, :)missing}"
+        return 1
     fi
     
     # Sett opp testmiljøvariabler
@@ -64,15 +70,7 @@ setup() {
     export DEBUG=false
     export YAML_FILE="${TEST_DIR}/config.yaml"
     export DEFAULT_CONFIG="${TEST_DIR}/default-config.yaml"
-    
-    # Source nødvendige filer
-    # shellcheck source=/dev/null
-    source "${SCRIPT_DIR}/modules/utils.sh"
-    # shellcheck source=/dev/null
-    source "${SCRIPT_DIR}/modules/maintenance.sh"
-    # shellcheck source=/dev/null
-    source "${SCRIPT_DIR}/modules/config.sh"
-    
+
     echo "Testmiljø klart i ${TEST_DIR}"
 }
 
@@ -157,6 +155,19 @@ hosts:
     incremental: false
     verify_after_backup: true
 EOF
+}
+
+test_environment_setup() {
+    echo -e "\nTester test-miljø..."
+    
+    assert "command -v yq" \
+        "yq er installert"
+    assert "[[ -x ${MODULES_DIR}/utils.sh ]]" \
+        "utils.sh er tilgjengelig og kjørbar"
+    assert "type update_progress" \
+        "update_progress funksjon er tilgjengelig"
+    assert "type draw_progress_bar" \
+        "draw_progress_bar funksjon er tilgjengelig"
 }
 
 # =============================================================================
@@ -388,7 +399,7 @@ test_rotate_backups() {
     # Sjekk at vi har maksimalt MAX_BACKUPS backups
     local backup_count
     backup_count=$(find "${TEST_BACKUP_BASE}" -maxdepth 1 -type d -name "backup-*" | wc -l)
-    assert "(( backup_count <= MAX_BACKUPS ))" \
+    assert "(( backup_count <= TEST_MAX_BACKUPS ))" \
         "Antall backups er innenfor grensen"
     
     # Sjekk at de eldste backupene ble fjernet
@@ -416,6 +427,77 @@ test_cleanup_failed_backups() {
         "Gammel mislykket backup ble fjernet"
     assert "[[ -d '$failed_new' ]]" \
         "Ny mislykket backup ble beholdt"
+}
+
+test_exclude_patterns() {
+    echo -e "\nTester exclude-patterns..."
+    
+    local test_config="${TEST_DIR}/test_config.yaml"
+    cat > "$test_config" << EOF
+comprehensive_exclude:
+  - "**/.cache/huggingface/**"
+  - "**/node_modules/**"
+  - "**/*.tmp"
+  - ".gradle"
+  - "Library/Caches"
+EOF
+    chmod 600 "$test_config"
+    export YAML_FILE="$test_config"
+    
+    # Test wildcards
+    assert "is_excluded '.cache/huggingface/models' 'comprehensive'" \
+        "Wildcard matching av .cache/huggingface"
+    assert "is_excluded 'project/node_modules/lib' 'comprehensive'" \
+        "Wildcard matching av node_modules"
+    assert "is_excluded 'temp/test.tmp' 'comprehensive'" \
+        "Wildcard matching av tmp-filer"
+    
+    # Test eksakte matcher
+    assert "is_excluded '.gradle' 'comprehensive'" \
+        "Eksakt match av .gradle"
+    assert "is_excluded 'Library/Caches' 'comprehensive'" \
+        "Eksakt match av Library/Caches"
+}
+
+test_wildcard_patterns() {
+    echo -e "\nTester komplekse wildcard-patterns..."
+    
+    local test_config="${TEST_DIR}/test_config.yaml"
+    cat > "$test_config" << EOF
+comprehensive_exclude:
+  - "**/{.git,node_modules,dist}/**"
+  - "**/*.{tmp,temp,log}"
+  - "Library/{Caches,Logs}/**"
+EOF
+    chmod 600 "$test_config"
+    export YAML_FILE="$test_config"
+    
+    # Test komplekse wildcards
+    assert "is_excluded 'project/.git/config' 'comprehensive'" \
+        "Kompleks wildcard med .git"
+    assert "is_excluded 'Library/Caches/Chrome' 'comprehensive'" \
+        "Kompleks wildcard med Library/Caches"
+    assert "is_excluded 'src/temp.log' 'comprehensive'" \
+        "Kompleks wildcard med filendelser"
+}
+
+test_progress_reporting() {
+    echo -e "\nTester progress-rapportering..."
+    
+    local test_dir="${TEST_DIR}/progress_test"
+    mkdir -p "$test_dir"
+    
+    # Opprett testfiler
+    for i in {1..10}; do
+        dd if=/dev/zero of="${test_dir}/file${i}" bs=1M count=1 2>/dev/null
+    done
+    
+    # Test progress
+    init_progress 10 "Test"
+    assert "update_progress 1 'test_file'" \
+        "Progress oppdatering med filnavn"
+    assert "[[ $CURRENT_PROGRESS -eq 10 ]]" \
+        "Progress prosent beregning"
 }
 
 # =============================================================================
@@ -453,6 +535,6 @@ main() {
 }
 
 # Kjør testene hvis skriptet kjøres direkte
-if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+if [[ "${ZSH_VERSION:-}" ]] && [[ "$0" == "${(%):-%x}" ]]; then
     main
 fi

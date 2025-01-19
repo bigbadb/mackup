@@ -1,9 +1,74 @@
-# Standard backup-konfigurasjon
+# Comprehensive Backup Konfigurasjonen
 
-# Grunnleggende konfigurasjon
-backup_strategy: "comprehensive"  # 'comprehensive' eller 'selective'
+# Backup-strategi
+backup_strategy: "selective"
 
-# System info som skal samles ved backup
+# VSCode-spesifikk konfigurasjon
+vscode_config:
+  profiles: 
+    - "Library/Application Support/Code/User/profiles"
+  extensions:
+    - "Continue"
+    - "User/settings.json"
+    - "User/keybindings.json"
+
+# Områder som skal inkluderes
+include:
+  - Documents
+  - .ssh
+  - .config
+  - .continue
+  - .zshrc
+  - .gitconfig
+  - .env
+  - Library/Application Support/Code
+  - Library/Application Support/Claude
+  - Library/Application Support/ChatGPT
+  - Library/Application Support/Sublime*
+  - Library/Application Support/Joplin
+  - tmp
+
+# Områder som skal ekskluderes
+exclude:
+  # Library-mapper som kan ekskluderes
+  - Library/Application Support/*
+  - Library/Caches
+  - Library/Logs
+  - Library/Developer
+  - Library/CloudStorage
+  - Library/Preferences
+  - Library/Safari
+  - Library/Mail
+  - Library/Messages
+
+  # Unødvendige mapper
+  - .Trash
+  - .cache/huggingface
+  - .npm
+  - node_modules
+  - .gradle
+  - .maven
+  - .espressif
+  - .pyenv
+  - .android
+  - .local/share/Trash
+  - "**/.cache/huggingface/**"
+
+
+  # Mappa med backups:
+  - vscode/mackup/backups
+
+  # Midlertidige mapper
+  - "**/build"
+  - "**/dist"
+  - "**/*.tmp"
+  - "**/*.temp"
+
+  # Tokens og sensitive data
+#  - .token_huggingface
+#  - .token_grog
+
+# Sikkerhet og systemdetaljer
 system_info:
   collect: true
   include:
@@ -11,86 +76,16 @@ system_info:
     - hardware_info
     - installed_apps
     - network_config
-    - disk_usage
-    - mounted_volumes
 
-# Konfigurasjon for comprehensive backup
-comprehensive_exclude:
-  # Systemmapper
-  - "Library/Caches"
-  - "Library/Logs"
-  - ".Trash"
-  - ".cache/**"
-  - ".espressif"
-  - ".local/share/Trash"
-  
-  # Utviklingsmiljø
-  - "node_modules"
-  - ".npm"
-  - ".maven"
-  - ".gradle"
-  - "**/venv"
-  - "**/env"
-  - "**/.venv"
-  - "**/build"
-  - "**/dist"
-  
-  # Temporære filer
-  - "**/*.tmp"
-  - "**/*.temp"
-  - "**/*.swp"
-  - "**/*~"
-  
-  # Store applikasjonsmapper
-  - "Library/Application Support/Steam"
-  - "Library/Developer/Xcode/iOS DeviceSupport"
-  - "Library/Developer/Xcode/DerivedData"
-  - "Library/CloudStorage"
+# Backup-innstillinger
+incremental: true
+verify_after_backup: true
+compress_after_days: 7
+max_backups: 5
 
-
-# Filer som alltid skal inkluderes
-force_include:
-  - ".ssh/**"
-  - ".gitconfig"
-  - ".zshrc"
-  - ".bashrc"
-  - ".bash_profile"
-  - "Documents/**"
-
-# Konfigurasjon for selective backup
-include:
-  - Documents
-  - Downloads
-  - Pictures
-  - Music
-  - .ssh
-  - .config
-  - .zshrc
-  - .bashrc
-  - .bash_profile
-  - .gitconfig
-  - .env
-  - Library/Application Support/Code/User
-
-
-exclude:
-  - Library
-  - .zsh_sessions
-  - Applications
-  - Desktop
-  - Public
-  - .cache
-  - .espressif
-  - .vscode
-
+# Spesielle tilfeller
 special_cases:
   JoplinBackup:
     source: "~/JoplinBackup"
     destination: "~/Documents/joplineksport"
     only_latest: true
-
-# Backup-innstillinger
-incremental: false
-verify_after_backup: true
-compress_after_days: 7
-max_backups: 10
