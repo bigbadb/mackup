@@ -23,18 +23,28 @@ scan_homebrew() {
     debug "Skanner Homebrew-installasjoner..."
     local formula_count=0
     local cask_count=0
-    
-    formula_count=$(brew list --formula | wc -l | tr -d ' ')
-    cask_count=$(brew list --cask | wc -l | tr -d ' ')
+    local temp_file="/tmp/homebrew_scan_$$.txt"
     
     {
-        echo "# Homebrew Formulae"
-        brew list --formula || error "Feil ved listing av formulae"
-        echo -e "\n## CASKS"
-        brew list --cask || error "Feil ved listing av casks"
+        if ! brew list --formula > "$temp_file"; then
+            error "Feil ved listing av formulae"
+            rm -f "$temp_file"
+            return 1
+        fi
+        formula_count=$(wc -l < "$temp_file")
+        
+        echo -e "\n## CASKS" >> "$temp_file"
+        if ! brew list --cask >> "$temp_file"; then
+            error "Feil ved listing av casks"
+            rm -f "$temp_file"
+            return 1
+        fi
+        cask_count=$(brew list --cask | wc -l)
     } > "$TEMP_DIR/homebrew.txt"
     
+    rm -f "$temp_file"
     debug "Fant $formula_count formulae og $cask_count casks"
+    return 0
 }
 
 scan_mas_apps() {

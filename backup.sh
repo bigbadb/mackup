@@ -3,6 +3,26 @@
 # =============================================================================
 # Modulært Backup Script med YAML-konfigurasjon
 # =============================================================================
+readonly SCRIPT_DIR="${0:A:h}"
+readonly MODULES_DIR="${SCRIPT_DIR}/modules"
+readonly BACKUP_BASE_DIR="${SCRIPT_DIR}/backups"
+readonly YAML_FILE="${SCRIPT_DIR}/config.yaml"
+readonly DEFAULT_CONFIG="${SCRIPT_DIR}/default-config.yaml"
+readonly LAST_BACKUP_LINK="${BACKUP_BASE_DIR}/last_backup"
+readonly LOG_DIR="${BACKUP_BASE_DIR}/logs"
+readonly HOSTNAME=$(scutil --get LocalHostName 2>/dev/null || hostname)
+
+# System og vedlikehold
+readonly MAX_RETRIES=3
+readonly RETRY_DELAY=5
+readonly MAX_BACKUPS=10
+readonly COMPRESSION_AGE=7  # dager før komprimering
+readonly BACKUP_RETENTION=30  # dager å beholde backups
+
+export SCRIPT_DIR MODULES_DIR BACKUP_BASE_DIR LOG_DIR YAML_FILE DEFAULT_CONFIG LAST_BACKUP_LINK HOSTNAME MAX_RETRIES RETRY_DELAY MAX_BACKUPS COMPRESSION_AGE BACKUP_RETENTION
+
+. "${MODULES_DIR}/config.sh"
+
 setopt extendedglob
 setopt NO_nomatch
 setopt NULL_GLOB
@@ -11,36 +31,13 @@ setopt NULL_GLOB
 set -euo pipefail
 IFS=$'\n\t'
 
-# =============================================================================
-# Konstanter og Konfigurasjon
-# =============================================================================
-readonly SCRIPT_DIR="${0:A:h}"
-readonly BACKUP_BASE_DIR="${SCRIPT_DIR}/backups"
+## BEHOLDES
 readonly TIMESTAMP=$(date +%Y%m%d-%H%M%S)
 readonly BACKUP_DIR="${BACKUP_BASE_DIR}/backup-${TIMESTAMP}"
-readonly LOG_DIR="${BACKUP_BASE_DIR}/logs"
-readonly MODULES_DIR="${SCRIPT_DIR}/modules"
-readonly YAML_FILE="${SCRIPT_DIR}/config.yaml"
-readonly DEFAULT_CONFIG="${SCRIPT_DIR}/default-config.yaml"
-readonly LAST_BACKUP_LINK="${BACKUP_BASE_DIR}/last_backup"
 readonly REQUIRED_SPACE=10000000  # 10GB i KB
-
-# System-relaterte konstanter
-readonly HOSTNAME=$(scutil --get LocalHostName 2>/dev/null || hostname)
-export HOSTNAME  # Gjør tilgjengelig for alle moduler
-
-# Metadata-relaterte konstanter
-readonly METADATA_FILE="backup-metadata"
-readonly METADATA_VERSION="1.1"
-readonly CHECKSUM_FILE="checksums.md5"
-readonly METADATA_SCHEMA_VERSION="1.0"
-
-# Vedlikeholdsrelaterte konstanter
-readonly MAX_RETRIES=3
-readonly RETRY_DELAY=5
-readonly MAX_BACKUPS=10
-readonly COMPRESSION_AGE=7  # dager før komprimering
-readonly BACKUP_RETENTION=30  # dager å beholde backups
+typeset INTERRUPT_CAUGHT=false
+typeset CURRENT_OPERATION=""
+typeset -a CLEANUP_TASKS=()
 
 # Standardverdier
 typeset -g DRY_RUN=false
@@ -56,6 +53,8 @@ typeset -g BACKUP_STRATEGY=""
 typeset -g RESTORE_NAME=""
 typeset -g CONFIG_WIZARD=false
 typeset -g FIRST_TIME_SETUP=false
+typeset -ga REQUIRED_DEPS
+REQUIRED_DEPS=(yq rsync mas)
 
 # Opprett loggkatalog
 mkdir -p "$LOG_DIR"
@@ -72,6 +71,8 @@ if [[ ! -f "${MODULES_DIR}/utils.sh" ]]; then
     exit 1
 fi
 source "${MODULES_DIR}/utils.sh"
+trap cleanup_on_interrupt INT TERM
+
 #source "${MODULES_DIR}/config.sh"
 #source "${MODULES_DIR}/user_data.sh"
 
@@ -79,7 +80,7 @@ source "${MODULES_DIR}/utils.sh"
 load_modules() {
     log "DEBUG" "Starter lasting av moduler..."
     
-    local -a required_modules=(
+    typeset -a required_modules=(
         "config.sh"
         "user_data.sh"
         "maintenance.sh"
@@ -88,11 +89,20 @@ load_modules() {
         "apps.sh"
     )
     
-    for module in "${required_modules[@]}"; do
+     # Verifiser moduler med forbedret feilhåndtering
+    typeset -a missing
+    for module in ${required_modules[@]}; do
         if [[ ! -f "${MODULES_DIR}/${module}" ]]; then
-            error "Påkrevd modul mangler: ${module}"
-            return 1
+            missing+=("$module")
         fi
+    done
+    
+    if (( ${#missing[@]} > 0 )); then
+        error "Manglende moduler: ${(j:, :)missing}"
+        return 1
+    fi
+    
+    for module in ${required_modules[@]}; do
         log "DEBUG" "Laster modul: ${module}"
         source "${MODULES_DIR}/${module}" || {
             error "Kunne ikke laste modul: ${module}"
@@ -258,6 +268,44 @@ handle_strategy_change() {
         esac
     done
 }
+## Avbruddshåndtering
+cleanup_on_interrupt() {
+    INTERRUPT_CAUGHT=true
+    echo -e "\n"
+    log "WARN" "Avbrudd fanget. Rydder opp..."
+    
+    # Kjør registrerte cleanup-oppgaver i motsatt rekkefølge
+    for ((i=${#CLEANUP_TASKS[@]}-1; i>=0; i--)); do
+        eval "${CLEANUP_TASKS[i]}"
+    done
+    
+    if [[ -n "$CURRENT_OPERATION" ]]; then
+        log "INFO" "Avbrutt under: $CURRENT_OPERATION"
+    fi
+    
+    # Flytter loggfil til endelig plassering
+    if [[ -f "$TEMP_LOG_FILE" ]]; then
+        local final_log="${LOG_DIR}/interrupted-${TIMESTAMP}.log"
+        mv "$TEMP_LOG_FILE" "$final_log"
+        log "INFO" "Logg lagret til: $final_log"
+    fi
+    
+    exit 1
+}
+
+# Hjelpefunksjon for å registrere cleanup-oppgaver
+register_cleanup() {
+    local task="$1"
+    CLEANUP_TASKS+=("$task")
+}
+
+# Hjelpefunksjon for å sette nåværende operasjon
+set_current_operation() {
+    CURRENT_OPERATION="$1"
+    log "DEBUG" "Starter operasjon: $CURRENT_OPERATION"
+}
+
+
 # =============================================================================
 # Håndter input-parametere
 # =============================================================================
@@ -267,6 +315,19 @@ parse_arguments() {
             -h|--help)
                 show_help
                 exit 0
+                ;;
+            -e|--exclude)
+                shift
+                if [[ -n "$1" ]]; then
+                    EXCLUDES+=("$1")
+                else
+                    error "Mangler verdi for exclude"
+                    show_help
+                    exit 1
+                fi
+                ;;
+            --exclude=*)
+                [[ -n "${1#*=}" ]] && EXCLUDES+=("${1#*=}")
                 ;;
             -s)
                 BACKUP_STRATEGY=$(prompt_strategy)
@@ -283,19 +344,6 @@ parse_arguments() {
             -ss|--strategy=selective)
                 BACKUP_STRATEGY="selective"
                 export CONFIG_STRATEGY="$BACKUP_STRATEGY"
-                ;;
-            -e|--exclude)
-                shift
-                if [[ -n "$1" ]]; then
-                    EXCLUDES+=("$1")
-                else
-                    error "Mangler verdi for exclude"
-                    show_help
-                    exit 1
-                fi
-                ;;
-            --exclude=*)
-                [[ -n "${1#*=}" ]] && EXCLUDES+=("${1#*=}")
                 ;;
             -i|--incremental)
                 INCREMENTAL=true
@@ -347,7 +395,7 @@ parse_arguments() {
     done
     
     # Legg til validering for gjensidig utelukkende flagg
-    local -i exclusive_count=0
+    typeset -i exclusive_count=0
     [[ "$CONFIG_WIZARD" == true ]] && ((exclusive_count++))
     [[ "$FIRST_TIME_SETUP" == true ]] && ((exclusive_count++))
     [[ "$LIST_BACKUPS_FLAG" == true ]] && ((exclusive_count++))
@@ -361,26 +409,46 @@ parse_arguments() {
     fi
 }
 
+verify_paths() {
+    local backup_dir="$1"
+    if [[ "$backup_dir" != "${BACKUP_BASE_DIR}"* ]]; then
+        error "Ugyldig backup-katalog: Må være under ${BACKUP_BASE_DIR}"
+        return 1
+    fi
+    return 0
+}
 
 # =============================================================================
 # Hovedfunksjon
 # =============================================================================
 
 main() {
-    local config_file="$HOME/.config/backup/config.yaml"
-    # Forbedret error handling
-    trap 'error "Feil i linje $LINENO: $BASH_COMMAND"' ERR
+    local config_file="$YAML_FILE"
+    trap 'error "Feil i linje $LINENO"' ERR
+ 
+    # Parse argumenter først
+    parse_arguments "$@"
+
+    # Vis hjelp hvis forespurt
+    if [[ "$HELP_FLAG" == true ]]; then
+        show_help
+        exit 0
+    fi
     
-    # Last moduler først
+    # Last moduler
     debug "Starter modullasting..."
     if ! load_modules; then
         error "Kunne ikke laste nødvendige moduler"
         exit 1
     fi
-    
-    # Parse argumenter før konfigurasjon for å håndtere --debug og strategy
-    parse_arguments "$@"
-    
+
+    # Last konfigurasjon
+    debug "Laster konfigurasjon..."
+    if ! load_config "$YAML_FILE" "$(scutil --get LocalHostName)"; then
+        error "Kunne ikke laste konfigurasjon"
+        exit 1
+    fi
+
     # Håndter konfigurasjonswizard før hovedoperasjoner
     if [[ "${CONFIG_WIZARD:-false}" == true ]]; then
         if [[ ! -f "$YAML_FILE" ]]; then
@@ -389,16 +457,18 @@ main() {
         run_config_wizard "$YAML_FILE"
         exit 0
     fi
+
     # Håndter list-excludes
     if [[ "${LIST_EXCLUDES:-false}" == true ]]; then
         log "INFO" "Ekskluderte mønstre:"
-        if [[ "$BACKUP_STRATEGY" == "comprehensive" ]]; then
+        if [[ "$CONFIG_STRATEGY" == "comprehensive" ]]; then
             yq e ".comprehensive_exclude[]" "$YAML_FILE"
         else
             yq e ".exclude[]" "$YAML_FILE"
         fi
         exit 0
     fi
+
     # Håndter førstegangsoppsett
     if [[ "${FIRST_TIME_SETUP:-false}" == true ]]; then
         if [[ ! -f "$YAML_FILE" ]]; then
@@ -406,13 +476,6 @@ main() {
         fi
         run_first_time_wizard "$YAML_FILE"
         exit 0
-    fi
-    
-    # Last konfigurasjon
-    debug "Laster konfigurasjon..."
-    if ! load_config "$YAML_FILE" "$(scutil --get LocalHostName)"; then
-        error "Kunne ikke laste konfigurasjon"
-        exit 1
     fi
     
     # Håndter spesielle operasjoner
@@ -436,20 +499,19 @@ main() {
         exit $?
     fi
     
-# Sjekk backup-strategi
-if [[ -z "$BACKUP_STRATEGY" ]]; then
-    if [[ -z "$CONFIG_STRATEGY" ]] && [[ -f "$YAML_FILE" ]]; then
-        # Bruk YAML-strategi kun hvis ingen andre er satt
-        BACKUP_STRATEGY=$(yq e ".backup_strategy" "$YAML_FILE")
-    else
-        BACKUP_STRATEGY="$CONFIG_STRATEGY"
+    # Sjekk backup-strategi
+    if [[ -z "$BACKUP_STRATEGY" ]]; then
+        if [[ -z "$CONFIG_STRATEGY" ]] && [[ -f "$YAML_FILE" ]]; then
+            BACKUP_STRATEGY=$(yq e ".backup_strategy" "$YAML_FILE")
+        else
+            BACKUP_STRATEGY="$CONFIG_STRATEGY"
+        fi
     fi
-fi
 
-if [[ -z "$BACKUP_STRATEGY" ]]; then
-    error "Ingen backup-strategi spesifisert. Bruk -s, -sc eller -ss"
-    exit 1
-fi
+    if [[ -z "$BACKUP_STRATEGY" ]]; then
+        error "Ingen backup-strategi spesifisert. Bruk -s, -sc eller -ss"
+        exit 1
+    fi
     
     # Håndter strategi-endringer
     handle_strategy_change "$BACKUP_STRATEGY"
@@ -459,7 +521,10 @@ fi
         preview_backup
         exit 0
     fi
-    
+
+    register_cleanup "rm -f $TEMP_LOG_FILE"
+    set_current_operation "backup"   
+
     # Utfør backup
     create_backup
     exit $?
@@ -470,7 +535,7 @@ fi
 # =============================================================================
 create_backup() {
     local backup_status=0
-
+    set_current_operation "backup av brukerdata"
     # Sjekk tilgjengelig diskplass før vi starter
     if ! check_disk_space "$REQUIRED_SPACE"; then
         error "Ikke nok diskplass tilgjengelig"

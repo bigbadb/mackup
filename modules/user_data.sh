@@ -5,7 +5,8 @@ source "${MODULES_DIR}/config.sh"
 # Konstanter
 # =============================================================================
 readonly MAX_RETRIES=3
-readonly RETRY_DELAY=30
+readonly RETRY_DELAY=5
+readonly ERROR_LOG="${LOG_DIR}/errors.log"
 
 # =============================================================================
 # Modul for backup og gjenoppretting av brukerdata
@@ -33,14 +34,17 @@ get_backup_strategy() {
 
 # Robust backup-funksjon med retry-mekanisme og forbedret logging
 backup_with_retry() {
-    local source="$1"
-    local target="$2"
+    typeset source="$1"
+    typeset target="$2"
     shift 2
-    local -a rsync_opts=("$@")
-    local retry_count=0
-    local success=false
-    local temp_log="/tmp/rsync_${RANDOM}.log"
-    local rsync_exit_code
+    typeset -a rsync_opts=("$@")
+    typeset retry_count=0
+    typeset success=false
+    typeset temp_log="/tmp/rsync_${RANDOM}.log"
+    typeset rsync_exit_code
+    typeset target_dir
+    local log_file="${TEMP_DIR}/rsync_detailed_log.txt"
+
 
     log "DEBUG" "====== BACKUP WITH RETRY START ======"
     log "DEBUG" "Kilde: $source"
@@ -51,11 +55,10 @@ backup_with_retry() {
     local total_files=$(find "$source" -type f 2>/dev/null | wc -l)
     init_progress "$total_files" "Backup"
 
-    # Eksisterende sjekker
     if [[ ! -e "$source" ]]; then
         log "DEBUG" "FEIL: Kilde eksisterer ikke: $source"
         return 1
-    }
+    fi
     
     # Verifiser målkatalog
     local target_dir
@@ -76,8 +79,13 @@ backup_with_retry() {
     if [[ ! -w "$target_dir" ]]; then
         log "DEBUG" "FEIL: Mangler skrivetilgang til målkatalog"
         return 1
-    }
+    fi
 
+# EKSTRADEKSTRALUBBEDUBBDUBBDUBB
+rsync_opts+=(
+    "--log-file=$log_file"  # Detaljert loggfil
+    "--log-file-format='%f %l %b %M'"  # Informativ formatering
+)
     # Test rsync med dry-run først
     log "DEBUG" "Tester rsync-kommando med --dry-run..."
     if ! rsync --dry-run -v "${rsync_opts[@]}" "$source" "$target" > "$temp_log" 2>&1; then
@@ -88,12 +96,12 @@ backup_with_retry() {
         done
         rm -f "$temp_log"
         return 1
-    }
+    fi
 
     while (( retry_count < MAX_RETRIES )) && [[ "$success" == "false" ]]; do
         log "DEBUG" "Forsøk $((retry_count + 1)) av $MAX_RETRIES"
         
-        if rsync "${rsync_opts[@]}" "$source" "$target" 2>&1 | tee "$temp_log" | while IFS= read -r line; do
+        if ! rsync "${rsync_opts[@]}" "$source" "$target" 2>&1 | tee "$temp_log" | while IFS= read -r line; do
             if [[ "$line" =~ ^[0-9]+% ]]; then
                 local current_file=$(echo "$line" | grep -o '[^ ]*$')
                 update_progress 1 "$current_file"
@@ -106,10 +114,15 @@ backup_with_retry() {
         else
             rsync_exit_code=$?
             log "ERROR" "Rsync feilet med kode $rsync_exit_code"
-            log "ERROR" "Rsync feilmeldinger:"
-            cat "$temp_log" | while IFS= read -r line; do
-                log "ERROR" "  $line"
-            done
+            echo "[$(date '+%Y-%m-%d %H:%M:%S')] Rsync feil ($rsync_exit_code) for $source -> $target" >> "$ERROR_LOG"
+            cat "$temp_log" >> "$ERROR_LOG"
+            
+            # Legg til spesifikk feilhåndtering basert på exit-kode
+            case $rsync_exit_code in
+                23) log "WARN" "Noen filer ble ikke overført (partial transfer)" ;;
+                12) log "ERROR" "Nettverksfeil under overføring" ;;
+                11) log "ERROR" "IO-feil under overføring" ;;
+            esac
 
             retry_count=$((retry_count + 1))
             if (( retry_count < MAX_RETRIES )); then
@@ -120,6 +133,11 @@ backup_with_retry() {
             fi
         fi
     done
+# Etter rsync-kallet
+if [[ -f "$log_file" ]]; then
+    debug "Detaljert rsync-logging:"
+    cat "$log_file" >> "$LOG_FILE"
+fi
 
     rm -f "$temp_log"
     log "DEBUG" "====== BACKUP WITH RETRY SLUTT ======"
@@ -338,35 +356,43 @@ build_rsync_params() {
 
     if [[ "$strategy" == "comprehensive" ]]; then
         # Legg til exclude-mønstre
+        debug "Comprehensive exclude mønstre:"
         while IFS= read -r pattern; do
             if [[ -n "$pattern" ]]; then
                 # Håndter relative stier og wildcards
                 pattern="${pattern/#\~/$HOME}"
                 # Sørg for at **/ fungerer korrekt med rsync
                 pattern="${pattern/#\*\*\//\*\*}"
+                debug "  Exclude: $pattern"
                 params+=("--exclude=$pattern")
             fi
         done < <(yq e ".comprehensive_exclude[]" "$YAML_FILE" 2>/dev/null)
         
         # Legg til force-include mønstre
+        debug "Force include mønstre:"
         while IFS= read -r pattern; do
             if [[ -n "$pattern" ]]; then
                 pattern="${pattern/#\~/$HOME}"
+                debug "  Include: $pattern"
                 params+=("--include=$pattern")
             fi
         done < <(yq e ".force_include[]" "$YAML_FILE" 2>/dev/null)
     else
         # For selective backup, bruk include/exclude lister
+        debug "Selective include mønstre:"
         while IFS= read -r pattern; do
             if [[ -n "$pattern" ]]; then
                 pattern="${pattern/#\~/$HOME}"
+                debug "  Include: $pattern"
                 params+=("--include=$pattern")
             fi
         done < <(yq e ".include[]" "$YAML_FILE" 2>/dev/null)
         
+        debug "Selective exclude mønstre:"
         while IFS= read -r pattern; do
             if [[ -n "$pattern" ]]; then
                 pattern="${pattern/#\~/$HOME}"
+                debug "  Exclude: $pattern"
                 params+=("--exclude=$pattern")
             fi
         done < <(yq e ".exclude[]" "$YAML_FILE" 2>/dev/null)
@@ -397,6 +423,7 @@ backup_user_data() {
     local backup_dir="$1"
     shift
     local dry_run=false
+    local error_count=0
     local incremental=false
     local excluded_count=0
     local excluded_size=0
@@ -427,6 +454,7 @@ backup_user_data() {
         "--delete"        # Slett filer som ikke finnes i kilde
         "--delete-excluded" # Slett ekskluderte filer fra backup
         "--info=progress2,skip2"
+        "-vv"              # Ekstra verbose logging
     )
 
     # Legg til dry-run hvis spesifisert
@@ -481,12 +509,12 @@ backup_user_data() {
     fi
 
     # Håndter spesialtilfeller hvis konfigurert
-    if [[ "${CONFIG_HAS_SPECIAL_CASES:-false}" == "true" ]]; then
-        log "DEBUG" "Håndterer spesialtilfeller"
-        if ! handle_special_cases "$HOSTNAME" "$backup_dir"; then 
-            error_count=$((error_count + 1))
-        fi
-    fi
+#    if [[ "${CONFIG_HAS_SPECIAL_CASES:-false}" == "true" ]]; then
+#        log "DEBUG" "Håndterer spesialtilfeller"
+#        if ! handle_special_cases "$HOSTNAME" "$backup_dir"; then 
+#            error_count=$((error_count + 1))
+#        fi
+#    fi
 
     if [[ -n "$RSYNC_OUTPUT" ]]; then
         excluded_count=$(echo "$RSYNC_OUTPUT" | grep "Number of files excluded:" | awk '{print $5}')

@@ -61,6 +61,12 @@ setup_directories() {
     done
 }
 
+cleanup_old_logs() {
+    log "INFO" "Rydder i gamle loggfiler..."
+    find "${LOG_DIR}" -name "*.log" -mtime +30 -delete
+    find "${LOG_DIR}" -name "*.log.*" -mtime +7 -delete
+}
+
 # Kopier moduler til riktig plassering
 setup_modules() {
     log "INFO" "Setter opp backup-moduler..."

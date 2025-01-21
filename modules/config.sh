@@ -11,6 +11,7 @@ set -euo pipefail
 # -----------------------------------------------------------------------------
 
 # Grunnleggende konfigurasjonsvariabler
+typeset -gA CONFIG
 : ${CONFIG_STRATEGY:=""}
 : ${CONFIG_INCREMENTAL:="false"}
 : ${CONFIG_VERIFY:="true"}
@@ -19,6 +20,12 @@ typeset -ga CONFIG_FORCE_INCLUDE
 typeset -ga CONFIG_INCLUDES
 : ${CONFIG_COLLECT_SYSINFO:="true"}
 typeset -ga CONFIG_SYSINFO_TYPES
+
+
+# Vedlikeholdskonfigurasjonsvariabler
+: ${CHECKSUM_FILE:="checksums.md5"}
+: ${METADATA_FILE="backup-metadata"}
+: ${METADATA_VERSION="1.1"}
 
 # -----------------------------------------------------------------------------
 # Valideringsfunksjoner
@@ -36,8 +43,29 @@ validate_yaml_syntax() {
 }
 
 # Hovedvalideringsfunksjon
-validate_config() {
+validate_config_values() {
     local config_file="$1"
+    
+    # Sjekk kritiske verdier
+    local retention
+    retention=$(yq e ".backup_retention" "$config_file")
+    if (( retention < 1 || retention > 365 )); then
+        error "Ugyldig backup_retention: Må være mellom 1 og 365 dager"
+        return 1
+    fi
+    
+    local compression_age
+    compression_age=$(yq e ".compress_after_days" "$config_file")
+    if (( compression_age < 1 || compression_age > retention )); then
+        error "compress_after_days må være mellom 1 og backup_retention"
+        return 1
+    fi
+    
+    return 0
+}
+
+validate_config() {
+    typeset config_file="$1"
     
     debug "Validerer konfigurasjon..."
     
@@ -48,9 +76,9 @@ validate_config() {
     fi
     
     # Sjekk filrettigheter
-    local file_perms
+    typeset file_perms
     file_perms=$(stat -f "%Lp" "$config_file")
-    if [ "$file_perms" -ne 600 ]; then
+    if (( file_perms != 600 )); then
         error "Konfigurasjonsfilen har feil rettigheter: $file_perms (skal være 600)"
         error "Kjør: chmod 600 $config_file"
         return 1
@@ -62,7 +90,7 @@ validate_config() {
     fi
     
     # Valider backup-strategi
-    local strategy
+    typeset strategy
     strategy=$(yq e ".backup_strategy" "$config_file")
     
     if [[ -z "$strategy" ]]; then
@@ -110,7 +138,7 @@ validate_config() {
 
 # Hovedfunksjon for konfigurasjonslasting
 load_config() {
-    local config_file="$1"
+    typeset config_file="$1"
     
     debug "Laster konfigurasjon fra $config_file..."
     
@@ -163,20 +191,19 @@ load_config() {
         done < <(yq e ".system_info.include[]" "$config_file")
     fi
     
-    # Last special cases hvis de finnes
-    if yq e ".special_cases" "$config_file" >/dev/null 2>&1; then
-        CONFIG_HAS_SPECIAL_CASES="true"
-    else
-        CONFIG_HAS_SPECIAL_CASES="false"
-    fi
+    # Last backup-vedlikeholdsinnstillinger
+    export CONFIG_MAX_BACKUPS=$(yq e ".max_backups // 10" "$config_file")
+    export CONFIG_COMPRESSION_AGE=$(yq e ".compress_after_days // 7" "$config_file")
+    export CONFIG_BACKUP_RETENTION=$(yq e ".backup_retention // 30" "$config_file")
     
     # Eksporter konfigurasjonsvariablene
     export CONFIG_STRATEGY
     export CONFIG_INCREMENTAL
     export CONFIG_VERIFY
     export CONFIG_COLLECT_SYSINFO
-    export CONFIG_HAS_SPECIAL_CASES
-    
+
     debug "Konfigurasjon lastet"
+
+    validate_config_values()
     return 0
 }

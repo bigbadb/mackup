@@ -29,10 +29,11 @@ include:
   - tmp
 
 # Områder som skal ekskluderes
-exclude:
+comprehensive_exclude:
   # Library-mapper som kan ekskluderes
   - Library/Application Support/*
   - Library/Caches
+  - Library/Containers
   - Library/Logs
   - Library/Developer
   - Library/CloudStorage
@@ -52,7 +53,8 @@ exclude:
   - .pyenv
   - .android
   - .local/share/Trash
-  - "**/.cache/huggingface/**"
+  - "*huggingface*"
+  - ".cache/huggingface"
 
 
   # Mappa med backups:
@@ -78,14 +80,15 @@ system_info:
     - network_config
 
 # Backup-innstillinger
-incremental: true
-verify_after_backup: true
-compress_after_days: 7
-max_backups: 5
+incremental: true # Inkrementell backup
+verify_after_backup: true # Verifiser backup etter at den er fullført
+compress_after_days: 7 # Dager
+max_backups: 10 # Antall
+backup_retention: 30 # Dager
 
 # Spesielle tilfeller
-special_cases:
-  JoplinBackup:
-    source: "~/JoplinBackup"
-    destination: "~/Documents/joplineksport"
-    only_latest: true
+# special_cases:
+#   JoplinBackup:
+#     source: "~/JoplinBackup"
+#     destination: "~/Documents/joplineksport"
+#     only_latest: true

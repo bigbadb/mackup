@@ -14,12 +14,18 @@ setopt NULL_GLOB
 
 # Hovedloggingfunksjon
 log() {
-    local level=$1
+    local level="$1"
     shift
     local message="$*"
-    local timestamp
-    timestamp=$(date '+%Y-%m-%d %H:%M:%S')
-    printf "[%s] [%-5s] %s\n" "$timestamp" "$level" "$message" | tee -a "${LOG_FILE:-/tmp/backup.log}"
+    local timestamp=$(date '+%Y-%m-%d %H:%M:%S')
+    local log_file="${LOG_FILE:-/tmp/backup.log}"
+    
+    # Roter loggfiler hvis større enn 100MB
+    if [[ -f "$log_file" ]] && (( $(stat -f%z "$log_file") > 104857600 )); then
+        mv "$log_file" "${log_file}.1"
+    fi
+    
+    printf "[%s] [%-5s] %s\n" "$timestamp" "$level" "$message" | tee -a "$log_file"
 }
 
 # Logg errormeldinger
@@ -77,29 +83,30 @@ init_progress() {
 
 # Tegner en progress bar
 draw_progress_bar() {
-    local percent=$1
-    local eta=$2
+    local percent=${1:-0}
+    local eta=${2:-0}
     local current_file="${3:-}"
     local width=$PROGRESS_WIDTH
     local completed=$((width * percent / 100))
     local remaining=$((width - completed))
     
-    # Tegn progress bar
     echo -ne "\033[u\033[K"  # Gå tilbake og clear linje
     echo -ne "\r["
-    echo -ne "\033[32m"  # Grønn for fullført
-    for ((i=0; i<completed; i++)); do echo -n "="; done
-    echo -ne "\033[33m"  # Gul for cursor
-    [[ $completed -lt $width ]] && echo -n ">"
-    echo -ne "\033[37m"  # Hvit for gjenværende
-    for ((i=completed+1; i<width; i++)); do echo -n " "; done
-    echo -ne "\033[0m"  # Reset farge
-    echo -n "] "
-    printf "%3d%% " "$percent"
+    
+    echo -ne "\033[32m"
+    echo -n "${(l:completed::=:):-}"
+    echo -ne "\033[33m"
+    (( completed < width )) && echo -n ">"
+    echo -ne "\033[37m"
+    echo -n "${(l:remaining:: :):-}"
+    echo -ne "\033[0m"
+    
+    printf "] %3d%% " "$percent"
     echo -n "[$CURRENT_PHASE] "
-    echo -n "ETA: $(format_time "$eta") "
-    [[ -n "$current_file" ]] && echo -n "Fil: ${current_file##*/}"
+    [[ -n "$eta" ]] && echo -n "ETA: $(format_time "$eta") "
+    [[ -n "$current_file" ]] && echo -n "Fil: ${current_file:t}"
 }
+
 
 # Oppdaterer framdrift
 update_progress() {
@@ -213,42 +220,37 @@ toggle_progress() {
 collect_system_info() {
     local backup_dir="$1"
     local info_dir="${backup_dir}/system_info"
+    local num_cores=$(sysctl -n hw.ncpu || echo 4)
+    local temp_dir=$(mktemp -d)
+    trap 'rm -rf "$temp_dir"' EXIT
+    
     mkdir -p "$info_dir"
-    
-    log "INFO" "Samler systeminformasjon..."
+    log "INFO" "Samler systeminformasjon parallelt..."
 
-    # Hent konfigurerte info-typer
+    # Verifiser konfigurasjon
     local collect_info=true
-    typeset -a info_types
-    info_types=()
-    
     if [[ -f "$YAML_FILE" ]]; then
         collect_info=$(yq e ".system_info.collect // true" "$YAML_FILE")
-        while IFS='' read -r type; do
-            [[ -n "$type" ]] && info_types+=("$type")
-        done < <(yq e ".system_info.include[]" "$YAML_FILE" 2>/dev/null || echo "")
     fi
 
-    if [[ "$collect_info" != "true" ]]; then
-        log "INFO" "Systeminfo-innsamling er deaktivert i konfigurasjon"
-        return 0
-    fi
+    [[ "$collect_info" != "true" ]] && return 0
 
-    # Grunnleggende systeminfo (samles alltid)
+    # Kjør innsamlinger parallelt
     {
-        echo "System Information"
-        echo "================="
-        echo "Timestamp: $(date '+%Y-%m-%d %H:%M:%S')"
-        echo "Hostname: $(scutil --get LocalHostName 2>/dev/null || hostname)"
-        echo "OS Version: $(sw_vers -productVersion)"
-        echo "Build Version: $(sw_vers -buildVersion)"
-        echo "Architecture: $(uname -m)"
-        echo "User: $USER"
-        echo "Home Directory: $HOME"
-    } > "${info_dir}/system_basic.txt"
+        # Grunnleggende info
+        {
+            echo "System Information"
+            echo "================="
+            echo "Timestamp: $(date '+%Y-%m-%d %H:%M:%S')"
+            echo "Hostname: $(scutil --get LocalHostName 2>/dev/null || hostname)"
+            echo "OS Version: $(sw_vers -productVersion)"
+            echo "Build Version: $(sw_vers -buildVersion)"
+            echo "Architecture: $(uname -m)"
+            echo "User: $USER"
+            echo "Home Directory: $HOME"
+        } > "${temp_dir}/system_basic.txt" &
 
-    # Hardware info
-    if [[ " ${info_types[@]:-} " =~ " hardware_info " ]]; then
+        # Hardware info
         {
             echo "Hardware Information"
             echo "==================="
@@ -256,22 +258,18 @@ collect_system_info() {
             echo "CPU Cores: $(sysctl -n hw.ncpu)"
             echo "Memory: $(( $(sysctl -n hw.memsize) / 1024 / 1024 / 1024 )) GB"
             system_profiler SPHardwareDataType
-        } > "${info_dir}/hardware_info.txt"
-    fi
+        } > "${temp_dir}/hardware_info.txt" &
 
-    # Disk og lagringsinfo
-    if [[ " ${info_types[@]:-} " =~ " disk_usage " ]]; then
+        # Disk info
         {
             echo "Disk Usage Information"
             echo "====================="
             df -h
             echo -e "\nMounted Volumes:"
             mount
-        } > "${info_dir}/disk_info.txt"
-    fi
+        } > "${temp_dir}/disk_info.txt" &
 
-    # Nettverksinfo
-    if [[ " ${info_types[@]:-} " =~ " network_config " ]]; then
+        # Nettverksinfo
         {
             echo "Network Configuration"
             echo "====================="
@@ -281,11 +279,9 @@ collect_system_info() {
             netstat -rn
             echo -e "\nDNS Configuration:"
             scutil --dns
-        } > "${info_dir}/network_info.txt"
-    fi
+        } > "${temp_dir}/network_info.txt" &
 
-    # Installerte applikasjoner
-    if [[ " ${info_types[@]:-} " =~ " installed_apps " ]]; then
+        # Installed apps
         {
             echo "Installed Applications"
             echo "====================="
@@ -295,8 +291,14 @@ collect_system_info() {
             brew list 2>/dev/null || echo "brew not installed"
             echo -e "\nApplications Directory:"
             ls -la "/Applications"
-        } > "${info_dir}/installed_apps.txt"
-    fi
+        } > "${temp_dir}/installed_apps.txt" &
+
+        wait
+    }
+
+    # Flytt filer parallelt til endelig destinasjon
+    find "$temp_dir" -type f -name "*.txt" -print0 | \
+    xargs -0 -n 1 -P "$num_cores" -I {} cp {} "$info_dir/"
 
     log "INFO" "Systeminfo samlet i ${info_dir}"
     return 0
@@ -366,22 +368,30 @@ calculate_backup_size() {
 is_excluded() {
     local path="$1"
     local strategy="$2"
+    local exclude_patterns=()
+    
+    printf "Sjekker om '$path' er ekskludert (strategi: $strategy)\n"
     
     if [[ "$strategy" == "comprehensive" ]]; then
-        while IFS=''read -r pattern; do
-            if [[ -n "$pattern" && "$path" == *"$pattern"* ]]; then
-                return 0  # Path matches exclude pattern
-            fi
-        done < <(yq e ".hosts.$HOSTNAME.comprehensive_exclude[]" "$YAML_FILE" 2>/dev/null)
+        mapfile -t exclude_patterns < <(yq e ".comprehensive_exclude[]" "$YAML_FILE" 2>/dev/null)
     else
-        while IFS=''read -r pattern; do
-            if [[ -n "$pattern" && "$path" == *"$pattern"* ]]; then
-                return 0  # Path matches exclude pattern
-            fi
-        done < <(yq e ".hosts.$HOSTNAME.exclude[]" "$YAML_FILE" 2>/dev/null)
+        mapfile -t exclude_patterns < <(yq e ".exclude[]" "$YAML_FILE" 2>/dev/null)
     fi
     
-    return 1  # Path is not excluded
+    debug "Exclude mønstre: ${exclude_patterns[*]}"
+    
+    for pattern in "${exclude_patterns[@]}"; do
+        if [[ -z "$pattern" ]]; then continue; fi
+        
+        # Bruk bash's utvidede mønstersammenlikning
+        if [[ "$path" == *"$pattern"* || "$path" == "$pattern"* || "$path" == *"$pattern" ]]; then
+            debug "Ekskludert av mønster: $pattern"
+            return 0
+        fi
+    done
+    
+    debug "Ikke ekskludert: $path"
+    return 1
 }
 
 # -----------------------------------------------------------------------------
@@ -390,9 +400,10 @@ is_excluded() {
 
 # Join array elementer med spesifisert skilletegn
 join_by() {
-    local d=${1-} f=${2-}
-    if shift 2; then
-        printf %s "$f" "${@/#/$d}"
+    typeset d=${1-} f=${2-}
+    if (( $# > 2 )); then
+        shift 2
+        print -n -- "$f" "${(@)^@/#/$d}"
     fi
 }
 
@@ -416,19 +427,15 @@ command_exists() {
 # Hjelpefunksjoner for filverifisering
 verify_file_integrity() {
     local file="$1"
-    local verify_type="${2:-basic}"  # 'basic' eller 'full'
-    local status=0
-
-    debug "Verifiserer filintegritet: $file (type: $verify_type)"
+    local verify_type="${2:-basic}"
+    local verify_status=0
 
     # Grunnleggende sjekker
     if [[ ! -f "$file" ]]; then
-        error "Fil eksisterer ikke: $file"
         return 1
     fi
 
     if [[ ! -r "$file" ]]; then
-        error "Kan ikke lese fil: $file"
         return 1
     fi
 
@@ -436,39 +443,64 @@ verify_file_integrity() {
     local file_size
     file_size=$(stat -f %z "$file")
     if [[ $file_size -eq 0 ]]; then
-        warn "Fil er tom: $file"
-        status=1
+        return 1
     fi
 
-    # Full verifisering inkluderer flere sjekker
+    # Full verifisering for kritiske filer
     if [[ "$verify_type" == "full" ]]; then
-        # Prøv å lese filen for å sjekke om den er korrupt
+        # Prøv å lese filen
         if ! dd if="$file" of=/dev/null bs=1M 2>/dev/null; then
-            error "Kunne ikke lese fil: $file"
-            status=1
+            return 1
         fi
 
         # Sjekk filtillatelser
         local perms
         perms=$(stat -f "%Lp" "$file")
         if [[ "$perms" =~ [0-7][0-7][7][0-7] ]]; then
-            warn "Fil har uvanlige tillatelser: $file ($perms)"
-            status=1
+            return 1
         fi
     fi
 
-    return $status
+    return $verify_status
 }
 
-# Sikker sletting av filer
-safe_delete() {
-    local path="$1"
-    if [[ -e "$path" ]]; then
-        rm -rf "$path"
-        debug "Slettet: $path"
-        return 0
-    else
-        debug "Ingenting å slette: $path"
-        return 0
+verify_metadata() {
+    local backup_dir="$1"
+    local metadata_file="${backup_dir}/${METADATA_FILE}"
+    typeset -i verified=1  # Start med 1 (false i shell)
+
+    if [[ ! -f "$metadata_file" ]]; then
+        error "Metadata-fil mangler: ${metadata_file}"
+        return 1
     fi
+
+    # Verifiser påkrevde felt
+    local -a required_fields=(
+        "backup_version"
+        "strategy"
+        "timestamp"
+    )
+    
+    local missing_fields=0
+    for field in "${required_fields[@]}"; do
+        if ! grep -q "^${field}=" "$metadata_file"; then
+            error "Påkrevd metadatafelt mangler: $field"
+            ((missing_fields++))
+        fi
+    done
+
+    if ((missing_fields == 0)); then
+        verified=0  # Sett til 0 (true i shell) hvis ingen mangler
+    fi
+
+    # Valider metadata-verdier hvis grunnleggende validering var vellykket
+    if ((verified == 0)); then
+        local version
+        version=$(grep '^backup_version=' "$metadata_file" | cut -d= -f2)
+        if [[ "$version" != "${METADATA_VERSION}" ]]; then
+            warn "Metadata-versjon ($version) matcher ikke gjeldende versjon (${METADATA_VERSION})"
+        fi
+    fi
+
+    return $verified
 }

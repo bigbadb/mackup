@@ -8,12 +8,37 @@
 
 backup_apps() {
     local backup_dir="$1"
-    log "INFO" "Starter backup av applikasjoner..."
-    
-    # Utfør detaljert applikasjonsskanning
-    if ! scan_installed_apps "$backup_dir"; then
-        warn "Applikasjonsskanning feilet eller var ufullstendig"
+    log "INFO" "Starter parallell backup av applikasjoner..."
+    typeset -i num_cores
+    num_cores=$(sysctl -n hw.ncpu || echo 4)
+
+    # Oppretter midlertidig katalog for parallell prosessering
+    TEMP_DIR=$(mktemp -d)
+    trap 'rm -rf "$TEMP_DIR"' EXIT
+
+    # Kjør skanninger parallelt
+    {
+        # Homebrew
+        (scan_homebrew) &
+        # Mac App Store
+        (scan_mas_apps) &
+        # Manuelle installasjoner
+        (scan_manual_apps) &
+        # Vent på at alle prosesser er ferdige
+        wait
+    } 2>"${TEMP_DIR}/scan_errors.log"
+
+    # Sjekk for feil
+    if [[ -s "${TEMP_DIR}/scan_errors.log" ]]; then
+        warn "Noen skanninger feilet:"
+        cat "${TEMP_DIR}/scan_errors.log" | while read -r line; do
+            warn "  $line"
+        done
     fi
+
+    # Generer manifest parallelt med xargs
+    find "${TEMP_DIR}" -type f -name "*.txt" -print0 | \
+    xargs -0 -n 1 -P "$num_cores" cat > "${backup_dir}/apps_manifest.txt"
 
     log "INFO" "Backup av applikasjoner fullført"
     return 0

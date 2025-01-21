@@ -7,21 +7,21 @@
 # Globale variabler for testing
 readonly SCRIPT_DIR="${0:A:h}"
 readonly MODULES_DIR="${SCRIPT_DIR}/modules"
+YAML_FILE="${SCRIPT_DIR}/config.yaml"
+: ${YAML_FILE:="${SCRIPT_DIR}/default-config.yaml"}
 source "${MODULES_DIR}/config.sh"
 source "${MODULES_DIR}/utils.sh"
+load_config "$YAML_FILE"
 source "${MODULES_DIR}/maintenance.sh"
 readonly TEST_DIR="$(mktemp -d)"
 readonly TEST_BACKUP_BASE="${TEST_DIR}/backups"
 readonly TEST_LOG_DIR="${TEST_BACKUP_BASE}/logs"
 readonly TEST_HOSTNAME="$(scutil --get LocalHostName 2>/dev/null || hostname)"
-readonly CHECKSUM_FILE="checksums.md5"
-readonly METADATA_FILE="backup-metadata"
-readonly METADATA_VERSION="1.1"
+readonly TEMP_LOG_FILE="${TEST_DIR}/test_$$.log"
 
 readonly MAX_BACKUPS="${CONFIG_MAX_BACKUPS}"
-readonly COMPRESSION_AGE="${CONFIG_COMPRESSION_AGE}" 
+readonly COMPRESSION_AGE="${CONFIG_COMPRESSION_AGE}"
 readonly BACKUP_RETENTION="${CONFIG_BACKUP_RETENTION}"
-
 
 set -euo pipefail
 
@@ -181,16 +181,16 @@ test_config_handling() {
     local test_config="${TEST_DIR}/test_config.yaml"
     cat > "$test_config" << EOF
 # Standard konfigurasjon
-backup_strategy: "comprehensive"
+backup_strategy: "selective"
+vscode_config:
+  profiles: 
+  extensions:
+
 system_info:
   collect: true
   include:
     - os_version
     - hardware_info
-
-comprehensive_exclude:
-  - "Library/Caches"
-  - ".Trash"
 
 force_include:
   - ".ssh/**"
@@ -201,9 +201,15 @@ include:
 
 exclude:
   - Library
+  - "Library/Caches"
+  - ".Trash"
 
-incremental: false
-verify_after_backup: true
+incremental: true # Inkrementell backup
+verify_after_backup: true # Verifiser backup etter at den er fullført
+compress_after_days: 7 # Dager
+max_backups: 10 # Antall
+backup_retention: 30 # Dager
+
 EOF
     chmod 600 "$test_config"
     
@@ -213,7 +219,7 @@ EOF
     
     # Test 2: Valider at korrekt strategi ble lastet
     assert "[[ '$CONFIG_STRATEGY' == 'comprehensive' ]]" \
-        "Korrekt backup-strategi ble lastet"
+        "Korrekt backup-strategi ($CONFIG_STRATEGY) ble lastet"
     
     # Test 3: Sjekk at arrays ble lastet
     assert "[[ \${#CONFIG_EXCLUDES[@]} -gt 0 ]]" \
@@ -316,6 +322,9 @@ test_verify_backup() {
     # Test 1: Verifiser en gyldig backup
     local valid_backup="${TEST_BACKUP_BASE}/backup-valid"
     create_test_backup "$valid_backup"
+    mkdir -p "${valid_backup}/system"
+    touch "${valid_backup}/apps.json"
+    touch "${valid_backup}/homebrew.txt"
     assert "verify_backup '$valid_backup'" \
         "Verifisering av gyldig backup"
     

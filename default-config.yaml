@@ -72,7 +72,6 @@ include:
   - .env
   - Library/Application Support/Code/User
 
-
 exclude:
   - Library
   - .zsh_sessions
@@ -89,8 +88,18 @@ special_cases:
     destination: "~/Documents/joplineksport"
     only_latest: true
 
+# Sikkerhet og systemdetaljer
+system_info:
+  collect: true
+  include:
+    - os_version
+    - hardware_info
+    - installed_apps
+    - network_config
+
 # Backup-innstillinger
-incremental: false
-verify_after_backup: true
-compress_after_days: 7
-max_backups: 10
+incremental: true # Inkrementell backup
+verify_after_backup: true # Verifiser backup etter at den er fullført
+compress_after_days: 7 # Dager
+max_backups: 10 # Antall
+backup_retention: 30 # Dager
